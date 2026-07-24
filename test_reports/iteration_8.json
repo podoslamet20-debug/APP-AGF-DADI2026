@@ -1,0 +1,66 @@
+{
+  "summary": "Iteration 8 - Progres Barang menu overhaul fully verified. Backend: 16/16 pytest tests PASS (test_iter8.py). Frontend UI: all dialog flows PASS end-to-end - source toggle (Dari PO/Manual), PO->barang cascading dropdown with 'Qty Barang Masuk (max input): X' hint, Manual mode with red warning + barang selector + nama/pengrajin overrides, tanggal defaults to today and persists, client-side max attribute clamps grinda/servis/finishing/packing to qty_masuk, submit toast 'Progres disimpan', reload shows tanggal badge with calendar icon on each item card, inline stage inputs preserved with correct max attr.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Tambah Progres dialog + others (SPK/BM/Staffing dialogs)", "issues": ["DialogContent still missing DialogDescription/aria-describedby (a11y warning in console). Same finding as iter7 - not blocking but should be addressed for a11y compliance."]},
+      {"screen": "Progres dialog - Tanggal input", "issues": ["Uses browser-native <input type='date'> (mm/dd/yyyy) instead of shadcn Calendar+Popover. Same inconsistency as tanggal_masuk/tanggal_keluar/deadline flagged in iter7. Consider unifying."]}
+    ]
+  },
+  "verified_working": [
+    "BACKEND POST /api/progres: grinda=99999 with qty_masuk=400 -> stored grinda=400 (previously unclamped). Same for servis/finishing/packing individually and combined.",
+    "BACKEND POST /api/progres: tanggal='2026-02-08' saved and returned; omitting tanggal -> defaults to today UTC (YYYY-MM-DD).",
+    "BACKEND GET /api/progres/by-po: each item includes 'tanggal' field (verified value roundtrip).",
+    "BACKEND: packing=25 via POST /api/progres updates GET /api/po item.qty_ready=25 (sync); changing packing=15 updates qty_ready=15.",
+    "BACKEND: Manual mode (po_id=None) accepts nama_barang/nama_pengrajin/spesifikasi metadata; stages clamped to 0 when po_id=None (qty_masuk=0), which matches iter8 backend logic.",
+    "BACKEND: N10036 napeleon (qty_masuk=400) - grinda=99999 clamped to 400. qty_ready sync verified after restoring baseline packing=300.",
+    "BACKEND REGRESSION: staffing still returns 400 when qty > qty_ready; guest role still cannot see nama_pengrajin/pengrajin_list on GET /api/barang; all 4 rekap endpoints load.",
+    "UI LOGIN: admin@agfdata.com/admin123 -> lands on dashboard.",
+    "UI DIALOG OPEN: 'Tambah Progres' button (data-testid=add-progres-button) opens dialog with both source toggles (progres-source-po default, progres-source-manual) visible.",
+    "UI TANGGAL DEFAULT: progres-tanggal-input value is today (10-char YYYY-MM-DD).",
+    "UI DARI PO FLOW: progres-select-po lists all POs; selecting N10036 enables progres-select-barang-po (data-disabled cleared) with 2 items (napeleon, kopitiam stool). Selecting napeleon shows 'Qty Barang Masuk (max input): 400' hint text.",
+    "UI MANUAL FLOW: toggle to Manual -> progres-select-barang-manual visible from full DB catalog; nama_barang/nama_pengrajin override inputs present; red warning 'Mode manual: qty tidak dibatasi barang masuk' visible.",
+    "UI CLIENT-SIDE CLAMP: In Dari PO mode, grinda input has max='400' (from qty_masuk). Typing 99999 -> value clamped to 400 by clampInput on change.",
+    "UI SUBMIT: clicking submit-progres-button POSTs and toasts 'Progres disimpan'. Dialog closes. List reloads.",
+    "UI TANGGAL BADGE: card for napeleon shows badge '2026-02-15' with calendar icon after submit with that tanggal.",
+    "UI TABLE PRESERVED: Each item card shows 4 stage inputs (grinda/servis/finishing/packing) with data-testid=progres-{stage}-{po}-{item}. max attribute set to qty_masuk. Packing label reads 'Packing/Ready (max N)'.",
+    "UI KOMPLIT BADGE: Kopitiam Stool (packing=20, qty_masuk=20) shows KOMPLIT green badge.",
+    "UI INLINE EDIT: existing per-stage inputs remain editable at table level with same max cap."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iter8.py",
+    "/app/test_reports/pytest/iter8_results.xml"
+  ],
+  "action_items": [
+    "(OPTIONAL/DESIGN) Consider replacing browser-native <input type='date'> for Tanggal Progres and other date inputs with shadcn Calendar+Popover for a consistent UX (same finding as iter7).",
+    "(OPTIONAL/A11Y) Add DialogDescription / aria-describedby to all DialogContent components. Warning: 'Missing Description or aria-describedby={undefined} for {DialogContent}' appears in console when Progres dialog opens.",
+    "(OPTIONAL/CODE QUALITY) server.py still ~1800+ lines - break into routes/ and models/ modules.",
+    "(OPTIONAL/BEHAVIOR) In Manual mode qty_masuk=0 so all 4 stages get zeroed by _cap on backend even though the UI shows the values entered. Users may be surprised. Consider either: (a) don't clamp when po_id is empty (allow manual free-form), or (b) show explicit UI notice that manual entries won't persist stage values without linking to a PO. The current backend zeros them silently.",
+    "(OPTIONAL/SPK MODEL) SPK items still typed List[Dict[str, Any]] - untyped. Iter7 recommendation."
+  ],
+  "critical_code_review_comments": [
+    "ProgresBarang.jsx line 253: `max={manual ? undefined : maxQty || undefined}` - when manual mode is on, no client cap. Given backend zeros the values in manual mode (because qty_masuk=0 without po_id), the UX is confusing: user types values but they persist as 0. Either the backend should NOT clamp for manual mode, or the frontend should show a stronger warning that 'without PO you cannot record stage quantities'.",
+    "server.py update_progres (line ~776-790): The comment 'packing ≤ finishing ≤ servis ≤ grinda ≤ qty_masuk' is stated but NOT enforced - each stage is independently capped at qty_masuk only. If business logic actually requires the pipeline ordering (packing shouldn't exceed finishing, etc.), this needs to be added. If not, remove the misleading comment.",
+    "server.py update_progres does `doc.pop('_id', None)` after upsert (line 817) but the doc was constructed manually without _id in the first place - the pop is defensive but unnecessary. Note: `insert_one` mutates the passed dict to include _id (ObjectId). The pop removes ObjectId (which is non-JSON-serializable). Behavior is correct now but relies on mutation side-effect.",
+    "get_progres_by_po (server.py ~821): still iterates all PO/BM/progres collections (O(N)) per request. For scale, consider aggregation pipeline or caching.",
+    "ProgresBarang.jsx: filterTanggal only affects PDF export URL, not the list display. Users may expect filterTanggal to filter the visible items too - current UX shows filter next to filter-po but only PDF respects it. Consider clarifying label to 'Filter Tanggal (PDF only)'.",
+    "test_iter8.py class-scoped fixtures defined as instance methods trigger PytestRemovedIn10Warning - cosmetic; consider @classmethod for future-proofing.",
+    "ProgresBarang.jsx line 62: `const maxQty = manual ? Infinity : currentQtyMasuk;` - Infinity used as sentinel but the ternary on line 253 uses `manual ? undefined : maxQty || undefined` making maxQty=Infinity dead code in the max attribute path. Simplify.",
+    "DialogContent (all pages) missing DialogDescription - repeat a11y warning."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter8.py (new - 16 tests: all-stage clamp, tanggal persist/default, by-po tanggal field, packing->qty_ready sync, manual mode, N10036 scenario, regression staffing+guest+rekap)"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% (Progres dialog end-to-end: source toggle, PO cascade, manual mode, tanggal, client clamp, submit toast, badge on list, inline table preserved)"},
+  "test_credentials": "admin@agfdata.com / admin123 (verified). staff@agfdata.com/staff123 & tamu@agfdata.com/tamu123 also available.",
+  "seed_data_creation": "test_iter8.py creates ~10 TEST_ITER8_* barang and ~7 TEST_ITER8_* POs. Cleanup pass test_zzz_cleanup_test_iter8_records deletes all TEST_ITER8_* records at end. Also during UI test, the N10036 napeleon progres was temporarily overridden (grinda=400, packing=0) then RESTORED to iter7 baseline (grinda=300, servis=300, finishing=300, packing=300) via a post-test cleanup script. qty_ready=300 verified after restore. Zero test records remaining.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iter8 changes (all-4-stage server-side clamp, tanggal in POST/GET, manual mode, badge on card) verified. If iter9 modifies the manual-mode zeroing behavior (see action_item #4), retest that manual submissions preserve stage values without a PO. If date inputs are converted to shadcn Calendar+Popover, retest tanggal default + submission roundtrip. Note: DialogDescription a11y warning still present on multiple pages.",
+  "rca_of_the_issue": "N/A - no unresolved bugs. All 7 iter8 spec items (dialog source toggle, PO cascading dropdown, manual barang selector, tanggal input, client+server clamp of all 4 stages, submit toast + list reload with tanggal badge, inline edit preservation) fully implemented and verified end-to-end with matching backend + UI + integration flow. Only cosmetic/design suggestions remain."
+}

@@ -203,6 +203,12 @@ class ProgresUpdate(BaseModel):
     servis: Optional[int] = 0
     finishing: Optional[int] = 0
     packing: Optional[int] = 0
+    tanggal: Optional[str] = None
+    # Optional metadata for manual entries (used when item_id isn't from PO)
+    nama_barang: Optional[str] = None
+    nama_pengrajin: Optional[str] = None
+    spesifikasi: Optional[str] = None
+    gambar_path: Optional[str] = None
 
 # ===== Startup Event =====
 @app.on_event("startup")
@@ -775,8 +781,13 @@ async def update_progres(progres: ProgresUpdate, user: dict = Depends(get_curren
                 if item.get("barang_id") == progres.item_id:
                     qty_masuk += item.get("qty_diterima", 0) or 0
     
-    packing = min(progres.packing or 0, qty_masuk) if qty_masuk > 0 else 0
-    # If qty_masuk is 0 (no barang_masuk yet), packing must be 0
+    # Enforce all stage qtys cannot exceed qty_masuk (received). Also enforce logical order: packing ≤ finishing ≤ servis ≤ grinda ≤ qty_masuk
+    def _cap(v):
+        return min(max(v or 0, 0), qty_masuk) if qty_masuk > 0 else 0
+    grinda = _cap(progres.grinda)
+    servis = _cap(progres.servis)
+    finishing = _cap(progres.finishing)
+    packing = _cap(progres.packing)
     
     existing = await db.progres.find_one(query_key)
     
@@ -784,13 +795,19 @@ async def update_progres(progres: ProgresUpdate, user: dict = Depends(get_curren
         "po_id": key_po,
         "barang_masuk_id": progres.barang_masuk_id or "",
         "item_id": progres.item_id,
-        "grinda": progres.grinda or 0,
-        "servis": progres.servis or 0,
-        "finishing": progres.finishing or 0,
+        "grinda": grinda,
+        "servis": servis,
+        "finishing": finishing,
         "packing": packing,
         "qty_masuk": qty_masuk,
+        "tanggal": progres.tanggal or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
+    # Preserve manual metadata if provided (for barang not sourced from PO items)
+    for meta_key in ("nama_barang", "nama_pengrajin", "spesifikasi", "gambar_path"):
+        val = getattr(progres, meta_key, None)
+        if val:
+            doc[meta_key] = val
     
     if existing:
         await db.progres.update_one(query_key, {"$set": doc})
@@ -841,7 +858,7 @@ async def get_progres_by_po(user: dict = Depends(get_current_user)):
             bm_data = bm_agg.get(k)
             if not bm_data:
                 continue  # only include items already received in barang_masuk
-            pr = prog_map.get(k, {"grinda": 0, "servis": 0, "finishing": 0, "packing": 0})
+            pr = prog_map.get(k, {"grinda": 0, "servis": 0, "finishing": 0, "packing": 0, "tanggal": ""})
             packing = pr.get("packing", 0) or 0
             po_items.append({
                 "barang_id": bid,
@@ -854,6 +871,7 @@ async def get_progres_by_po(user: dict = Depends(get_current_user)):
                 "servis": pr.get("servis", 0) or 0,
                 "finishing": pr.get("finishing", 0) or 0,
                 "packing": packing,
+                "tanggal": pr.get("tanggal", "") or "",
                 "komplit": packing >= bm_data["qty_masuk"] and bm_data["qty_masuk"] > 0,
             })
         if po_items:
