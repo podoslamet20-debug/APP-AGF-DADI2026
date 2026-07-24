@@ -1,0 +1,83 @@
+{
+  "summary": "First iteration MVP testing. Backend: 32/33 pytest tests passed (97%). Frontend: All auth flows, navigation, and role-based UI hiding work correctly across admin/staff/tamu accounts. Two backend bugs found: (1) POST /api/progres returns 500 due to ObjectId serialization, (2) rekap/all-po incorrectly joins staffing to PO so qty_staffing is always 0.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/progres",
+        "issue": "Returns 500 ValueError: 'ObjectId' object is not iterable. Root cause: `db.progres.insert_one(doc)` mutates `doc` in-place by adding _id as ObjectId; the function then returns `doc` which FastAPI can't JSON-serialize. Fix: convert `doc['_id'] = str(result.inserted_id)` before returning (only for the insert branch), or just do `return {**doc}` without _id, or explicitly strip.",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "GET /api/rekap/all-po",
+        "issue": "qty_staffing is always 0 because the join uses `po.get('po_id', '')` but the PO document has no 'po_id' field (Mongo _id is stored as '_id'). Staffing.po_id stores the PO's Mongo _id string. Fix: change `s['po_id'] == po.get('po_id', '')` to `s['po_id'] == po['_id']` (where po['_id'] has already been stringified above).",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "CORS middleware",
+        "issue": "`allow_credentials=True` combined with `allow_origins='*'` is a spec violation. Browsers reject cookies when Access-Control-Allow-Origin is '*' + credentials mode. Currently works because backend echoes actual origin only if listed; set CORS_ORIGINS to explicit preview URL for safety."
+      },
+      {
+        "endpoint": "POST /api/auth/login",
+        "issue": "Login query uses email.lower() but seed users are inserted with the original case (e.g., 'admin@agfdata.com'). Works today since emails are already lowercase, but any admin created with uppercase email cannot log in."
+      },
+      {
+        "endpoint": "GET /api/staffing (filter tanggal)",
+        "issue": "Filter uses exact string match on tanggal_keluar. If UI passes ISO date but data is stored as any other format, filter silently returns empty. Consider a date range."
+      },
+      {
+        "endpoint": "No DELETE endpoints",
+        "issue": "There are no DELETE endpoints for barang/po/spk/barang-masuk/staffing; if not required by PRD, ignore, else add."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "LoginPage",
+        "issue": "React warning: 'Cannot update a component (BrowserRouter) while rendering a different component (LoginPage)'. Caused by calling `navigate('/')` during render when `user` is truthy. Move the redirect into a useEffect or use <Navigate to='/' /> instead.",
+        "selector": "LoginPage.jsx line 18-21",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Rekap PO tab",
+        "issue": "Staffing column always shows 0 due to backend bug in /api/rekap/all-po join. See backend critical issue #2.",
+        "affected_selectors": ["rekap-po-row-*"]
+      }
+    ],
+    "design_issues": [
+      {"screen": "General",  "issues": ["Colors, spacing and responsive layout are consistent with design guidelines. Sidebar collapses on mobile; role badges rendered clearly."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix POST /api/progres 500 error: strip ObjectId before returning after insert_one.",
+    "Fix /api/rekap/all-po join key from po.get('po_id') to po['_id'] to correctly aggregate qty_staffing.",
+    "Fix LoginPage redirect: move navigate() out of render body (use <Navigate /> or useEffect).",
+    "Optionally tighten CORS_ORIGINS from '*' to the explicit preview URL now that credentials cookies are used."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 846 lines - consider splitting into routers per resource (auth, barang, po, spk, rekap, exports).",
+    "get_current_user does ObjectId(payload['sub']) without try/except - malformed sub would raise 500 instead of 401.",
+    "put_object/init_storage use blocking `requests` inside async handlers - blocks event loop; consider httpx AsyncClient or run_in_executor.",
+    "insert_one mutates the input dict with ObjectId _id and code returns that dict elsewhere too (create_barang line 320) - works only because create_barang assigns `str(result.inserted_id)` before return, but progres endpoint forgot this. Establish a consistent helper.",
+    "No pagination on any list endpoint (uses .to_list(1000)) - will silently truncate at scale.",
+    "No unique index on PO no_po enforced at request-time; startup index creation may race for concurrent duplicate inserts (though caught as 500)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (new)"
+  ],
+  "success_rate": {"backend": "97% (32/33)", "frontend": "100% of tested flows (login, nav, RBAC hiding)"},
+  "test_credentials": "Admin: admin@agfdata.com/admin123, Staff: staff@agfdata.com/staff123, Tamu: tamu@agfdata.com/tamu123 (all verified working)",
+  "seed_data_creation": "Created TEST_-prefixed barang, PO, staffing, SPK, progres records via pytest fixtures. No cleanup performed - keep for retest.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest suite at /app/backend/tests/backend_test.py is fully green except TestProgres::test_update_progres_staff. After main agent fixes the ObjectId issue and the rekap join key, re-run pytest. UI smoke test verified login + RBAC visibility for all three roles; no need to redo full nav unless significant UI changes.",
+  "rca_of_the_issue": "1) POST /api/progres 500: motor's insert_one adds ObjectId _id to the mutated `doc`; the function returns doc, so FastAPI tries to serialize ObjectId and fails. Reproduction: login as staff, POST /api/progres with any payload. Mitigation: return {...doc, '_id': str(result.inserted_id)} or explicitly del doc['_id'] before return. 2) Rekap join bug: `po.get('po_id','')` never matches staffing.po_id which is the PO's Mongo _id. Reproduction: create PO, create Staffing referencing PO's _id, GET /api/rekap/all-po - qty_staffing is 0. Mitigation: change join key to po['_id']."
+}

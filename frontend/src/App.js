@@ -1,54 +1,46 @@
-import { useEffect } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-import { HOME } from "@/constants/testIds";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { Toaster } from "sonner";
+import LoginPage from "@/pages/LoginPage";
+import DashboardLayout from "@/layouts/DashboardLayout";
+import DatabaseBarang from "@/pages/DatabaseBarang";
+import POPage from "@/pages/POPage";
+import BarangMasuk from "@/pages/BarangMasuk";
+import Staffing from "@/pages/Staffing";
+import SPKPage from "@/pages/SPKPage";
+import ProgresBarang from "@/pages/ProgresBarang";
+import RekapData from "@/pages/RekapData";
+import Dashboard from "@/pages/Dashboard";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          data-testid={HOME.emergentLink}
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+function ProtectedRoute({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="flex items-center justify-center h-screen text-lg" data-testid="loading-screen">Memuat...</div>;
+  if (!user) return <Navigate to="/login" replace />;
+  return children;
+}
 
 function App() {
   return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+    <div className="App min-h-screen bg-[#FAFAFA]">
+      <AuthProvider>
+        <BrowserRouter>
+          <Toaster position="top-right" richColors />
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
+              <Route index element={<Dashboard />} />
+              <Route path="barang" element={<DatabaseBarang />} />
+              <Route path="po" element={<POPage />} />
+              <Route path="barang-masuk" element={<BarangMasuk />} />
+              <Route path="staffing" element={<Staffing />} />
+              <Route path="spk" element={<SPKPage />} />
+              <Route path="progres" element={<ProgresBarang />} />
+              <Route path="rekap" element={<RekapData />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
     </div>
   );
 }
