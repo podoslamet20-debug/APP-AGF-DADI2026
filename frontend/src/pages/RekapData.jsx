@@ -175,6 +175,7 @@ export default function RekapData() {
                     <th className="p-2 text-right">Qty PO</th>
                     <th className="p-2 text-right">Staffing</th>
                     <th className="p-2 text-right">Kurang Kirim</th>
+                    <th className="p-2 text-center">Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -189,6 +190,14 @@ export default function RekapData() {
                       <td className="p-2 text-right">{r.qty_po}</td>
                       <td className="p-2 text-right">{r.qty_staffing}</td>
                       <td className="p-2 text-right"><span className={`font-medium ${r.kurang_kirim > 0 ? 'text-[#F44336]' : 'text-[#4CAF50]'}`}>{r.kurang_kirim}</span></td>
+                      <td className="p-2 text-center">
+                        <div className="flex flex-wrap gap-1 justify-center">
+                          {r.komplit_pengrajin && <span className="text-xs px-1.5 py-0.5 bg-[#4CAF50] text-white rounded whitespace-nowrap" data-testid={`badge-komplit-pengrajin-${i}`}>Komplit Pengrajin</span>}
+                          {r.komplit_spk && <span className="text-xs px-1.5 py-0.5 bg-[#2196F3] text-white rounded whitespace-nowrap" data-testid={`badge-komplit-spk-${i}`}>Komplit SPK</span>}
+                          {r.komplit_terkirim && <span className="text-xs px-1.5 py-0.5 bg-[#9C27B0] text-white rounded whitespace-nowrap" data-testid={`badge-komplit-terkirim-${i}`}>Komplit Terkirim</span>}
+                          {r.ready && <span className="text-xs px-1.5 py-0.5 bg-[#FFC107] text-white rounded whitespace-nowrap" data-testid={`badge-ready-${i}`}>Ready</span>}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

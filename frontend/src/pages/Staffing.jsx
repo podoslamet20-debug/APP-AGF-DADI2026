@@ -40,7 +40,10 @@ export default function Staffing() {
     const po = pos.find(p => (p._id || p.id) === poId);
     if (!po) return;
     setSelectedPO(po);
-    setForm({ ...form, po_id: poId, items: po.items.map(i => ({ ...i, qty: 0, _selected: true, _max_qty: (i.qty || 0) })) });
+    setForm({ ...form, po_id: poId, items: po.items.map(i => {
+      const sisa = (i.qty || 0) - (i.qty_staffed || 0);
+      return { ...i, qty: 0, _selected: true, _max_qty: sisa, _sisa: sisa };
+    }) });
   };
 
   const toggleItem = (idx) => {
@@ -155,11 +158,11 @@ export default function Staffing() {
                           <div className="flex-1">
                             <p className="font-medium text-sm">{item.nama_barang}</p>
                             {canSeeCraftsman && <p className="text-xs text-[#5C5C5C]">{item.nama_pengrajin}</p>}
-                            <p className="text-xs text-[#5C5C5C]">Total PO: {item._max_qty || item.qty || 0}</p>
+                            <p className="text-xs text-[#5C5C5C]">Total PO: {item.qty} • Sudah dikirim: {item.qty_staffed || 0} • Sisa: <strong className="text-[#8B5A2B]">{item._sisa || 0}</strong></p>
                           </div>
                           <div className="w-24">
-                            <Label className="text-xs">Qty Keluar (max {item._max_qty || item.qty || 0})</Label>
-                            <Input type="number" min={0} max={item._max_qty || item.qty || 0} data-testid={`staffing-qty-${idx}`} value={item.qty || 0} onChange={(e) => updateQty(idx, e.target.value)} disabled={item._selected === false} />
+                            <Label className="text-xs">Qty (max {item._max_qty || 0})</Label>
+                            <Input type="number" min={0} max={item._max_qty || 0} data-testid={`staffing-qty-${idx}`} value={item.qty || 0} onChange={(e) => updateQty(idx, e.target.value)} disabled={item._selected === false || (item._max_qty || 0) === 0} />
                           </div>
                         </div>
                       ))}

@@ -474,6 +474,7 @@ async def update_po(po_id: str, po: POCreate, user: dict = Depends(get_current_u
             "harga_jual": barang["harga_jual"],
             "qty": item.qty,
             "qty_diterima": 0,
+            "qty_staffed": 0,
             "catatan": item.catatan
         })
     
@@ -829,17 +830,47 @@ async def get_rekap_all_po(no_po: Optional[str] = None, user: dict = Depends(get
     query = {"no_po": no_po} if no_po else {}
     pos = await db.po.find(query).to_list(1000)
     staffing = await db.staffing.find({}).to_list(1000)
+    spks = await db.spk.find({}).to_list(1000)
+    barang_masuk = await db.barang_masuk.find({}).to_list(1000)
+    progres = await db.progres.find({}).to_list(1000)
     for p in pos: p["_id"] = str(p["_id"])
     for s in staffing: s["_id"] = str(s["_id"])
     
-    # Calculate remaining items (PO - Staffing) - "Kurang Kirim"
+    # Calculate per-PO status flags
+    def po_status(po):
+        po_id = po["_id"]
+        no_po_val = po["no_po"]
+        items = po.get("items", [])
+        if not items:
+            return {"komplit_spk": False, "komplit_terkirim": False, "komplit_pengrajin": False, "ready": False}
+        # Komplit SPK: all barang_id in PO have an SPK entry with matching no_po
+        spk_barang_ids = set()
+        for spk in spks:
+            for si in spk.get("items", []):
+                if si.get("no_po") == no_po_val:
+                    spk_barang_ids.add(si.get("barang_id"))
+        komplit_spk = all(item.get("barang_id") in spk_barang_ids for item in items)
+        # Komplit Terkirim: all items qty_staffed >= qty
+        komplit_terkirim = all((item.get("qty_staffed", 0) or 0) >= item.get("qty", 0) for item in items)
+        # Komplit Pengrajin: all items qty_diterima >= qty
+        komplit_pengrajin = all((item.get("qty_diterima", 0) or 0) >= item.get("qty", 0) for item in items)
+        # Ready: for each item in PO, packing (from progres) >= qty_po. Requires qty_diterima to be complete too.
+        prog_map = {f"{po_id}_{p.get('item_id')}": p for p in progres if p.get("po_id") == po_id}
+        ready = True
+        for item in items:
+            bid = item.get("barang_id")
+            pr = prog_map.get(f"{po_id}_{bid}")
+            packing = (pr.get("packing", 0) if pr else 0)
+            if packing < item.get("qty", 0):
+                ready = False
+                break
+        return {"komplit_spk": komplit_spk, "komplit_terkirim": komplit_terkirim, "komplit_pengrajin": komplit_pengrajin, "ready": ready}
+    
     result = []
     for po in pos:
+        status = po_status(po)
         for item in po.get("items", []):
-            staffing_qty = sum(
-                si["qty"] for s in staffing if s.get("po_id") == po["_id"]
-                for si in s.get("items", []) if si.get("barang_id") == item.get("barang_id")
-            )
+            staffing_qty = item.get("qty_staffed", 0) or 0
             kurang_kirim = item["qty"] - staffing_qty
             result.append({
                 "no_po": po["no_po"],
@@ -849,7 +880,8 @@ async def get_rekap_all_po(no_po: Optional[str] = None, user: dict = Depends(get
                 "qty_po": item["qty"],
                 "qty_staffing": staffing_qty,
                 "kurang_kirim": kurang_kirim,
-                "gambar_path": item.get("gambar_path")
+                "gambar_path": item.get("gambar_path"),
+                **status,
             })
     
     if user["role"] == "guest":
@@ -1164,9 +1196,26 @@ async def delete_bm(bm_id: str, user: dict = Depends(get_current_user)):
 async def update_staffing(st_id: str, staffing: StaffingCreate, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin", "staff"]:
         raise HTTPException(status_code=403, detail="Not authorized")
+    # Revert old qty_staffed
+    old = await db.staffing.find_one({"_id": ObjectId(st_id)})
+    if old:
+        for item in old.get("items", []):
+            try:
+                await db.po.update_one(
+                    {"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]},
+                    {"$inc": {"items.$.qty_staffed": -item.get("qty", 0)}}
+                )
+            except Exception:
+                pass
     po = await db.po.find_one({"_id": ObjectId(staffing.po_id)})
     doc = {"po_id": staffing.po_id, "no_po": po["no_po"], "tanggal_keluar": staffing.tanggal_keluar, "items": staffing.items}
     await db.staffing.update_one({"_id": ObjectId(st_id)}, {"$set": doc})
+    # Apply new qty_staffed
+    for item in staffing.items:
+        await db.po.update_one(
+            {"_id": ObjectId(staffing.po_id), "items.barang_id": item["barang_id"]},
+            {"$inc": {"items.$.qty_staffed": item.get("qty", 0)}}
+        )
     return {"message": "Staffing updated"}
 
 
@@ -1174,9 +1223,19 @@ async def update_staffing(st_id: str, staffing: StaffingCreate, user: dict = Dep
 async def delete_staffing(st_id: str, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin", "staff"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    result = await db.staffing.delete_one({"_id": ObjectId(st_id)})
-    if result.deleted_count == 0:
+    old = await db.staffing.find_one({"_id": ObjectId(st_id)})
+    if not old:
         raise HTTPException(status_code=404, detail="Staffing not found")
+    # Revert qty_staffed
+    for item in old.get("items", []):
+        try:
+            await db.po.update_one(
+                {"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]},
+                {"$inc": {"items.$.qty_staffed": -item.get("qty", 0)}}
+            )
+        except Exception:
+            pass
+    await db.staffing.delete_one({"_id": ObjectId(st_id)})
     return {"message": "Staffing deleted"}
 
 

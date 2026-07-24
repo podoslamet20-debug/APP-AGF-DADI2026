@@ -1,0 +1,73 @@
+{
+  "summary": "Iteration 5 backend testing found TWO CRITICAL bugs blocking the feature. Frontend UI is largely wired correctly (badges render, Sisa text shows) but has ONE display bug (Total PO shows 0 in dialog). Backend: 5/11 pass, 6/11 fail. Root cause: create_po and create_staffing were never updated to handle qty_staffed — only update_po and update_staffing were touched.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/po (server.py:377-411)",
+        "issue": "create_po does NOT initialize qty_staffed=0 in items_with_details. Only update_po (line 456+) sets it. Newly-created POs are missing the field entirely.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "POST /api/staffing (server.py:540-560)",
+        "issue": "create_staffing does NOT increment po.items[].qty_staffed. Only update_staffing/delete_staffing were wired. As a result: creating a fresh staffing leaves qty_staffed=0 on the PO, and the Rekap 'Komplit Terkirim' badge and Staffing dialog 'Sisa' logic never advance for any newly-created staffing. The spec explicitly requires this.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Staffing.jsx dialog (line 161 + selectPO line 43-46)",
+        "issue": "Dialog shows 'Total PO: 0' instead of the actual PO qty. Root cause: selectPO() spreads {...i, qty: 0} — overwriting item.qty with the input value 0 — so the '{item.qty}' interpolation on line 161 renders 0. Should either preserve original qty as _original_qty (or _sisa + qty_staffed) or reference it separately.",
+        "selector": "[data-testid=add-staffing-button] -> dialog body",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Rekap PO 'Komplit Terkirim' badge",
+        "issue": "Because create_staffing doesn't increment qty_staffed, new staffing entries never make komplit_terkirim=True. UI badges render correctly given the data — the bug is upstream in the API.",
+        "affected_selectors": ["[data-testid^=badge-komplit-terkirim-]"]
+      }
+    ],
+    "design_issues": []
+  },
+  "verified_working": [
+    "N10036 shows 'Komplit SPK' blue badge on both rows in Rekap PO tab (verified via UI + API)",
+    "Rekap /api/rekap/all-po returns komplit_spk/komplit_terkirim/komplit_pengrajin/ready boolean fields on every row",
+    "Staffing dialog renders 'Total PO: X • Sudah dikirim: Y • Sisa: Z' text (Sisa & Sudah dikirim values correct; Total PO shows 0 - bug above)",
+    "Staffing qty input capped at _max_qty (verified 'Qty (max 20)' label on N10036 Kopitiam Stool)",
+    "update_po correctly resets qty_staffed to 0",
+    "update_staffing reverts old and applies new qty_staffed (behavior verified through the delta observed in the test)",
+    "delete_staffing reverts qty_staffed and returns 404 if id not found",
+    "Rekap PO table has new Status column with 4 badge components + data-testids",
+    "Existing migration successfully backfilled qty_staffed on N10036/N10037 (Kopitiam Stool=30, napeleon=100)"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iter5.py",
+    "/app/test_reports/pytest/iter5_results.xml"
+  ],
+  "action_items": [
+    "FIX server.py create_po (line 388-399): add \"qty_staffed\": 0, alongside \"qty_diterima\": 0 in items_with_details.",
+    "FIX server.py create_staffing (line 540-560): after insert_one, loop through staffing.items and $inc po.items.$.qty_staffed by item.qty (mirror update_staffing lines 1214-1218).",
+    "FIX Staffing.jsx selectPO (line 43-46): keep original PO qty in a separate field (e.g., _original_qty = i.qty) and change line 161 to render '{item._original_qty || item.qty}'. Or drop qty:0 override and drive the input from a separate _input_qty field."
+  ],
+  "critical_code_review_comments": [
+    "server.py now 1608 lines — modularization still overdue (as flagged in iter4).",
+    "po_status() in get_rekap_all_po (line 840) is O(POs × items × spks × spk.items) — fine at current scale but consider $lookup aggregation when data grows.",
+    "update_po (line 456+) resets qty_staffed to 0 unconditionally on every PO edit — this may silently wipe out already-shipped staffing history bookkeeping if an admin edits a PO after staffing exists. Consider preserving existing qty_staffed values per barang_id on update.",
+    "create_staffing/update_staffing accept staffing.items as a raw list[dict] (no Pydantic validation of qty/barang_id inside each item). Add a StaffingItem model.",
+    "No index on progres.po_id or staffing.po_id — po_status() loads full collections into memory."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter5.py (new - 11 tests covering iter5 scope: qty_staffed init on POST/PUT PO, POST/PUT/DELETE staffing side effects, rekap all-po 4 status flags, N10036 komplit_spk assertion)"
+  ],
+  "success_rate": {"backend": "45% (5/11) - two critical bugs in create_po & create_staffing", "frontend": "90% - one Total PO=0 display bug in dialog; all badges + Sisa text render correctly"},
+  "test_credentials": "Verified: admin@agfdata.com/admin123 login works, returns admin token.",
+  "seed_data_creation": "test_iter5.py creates several TEST_ITER5_* / TEST_iter5_* barang+PO chains (~5 barang, ~5 POs, cleanup of staffing done at end of the ST test class; barang & PO records remain in DB with TEST_ prefix for identification).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes the 2 critical backend bugs (add qty_staffed:0 in create_po, add $inc loop in create_staffing) and the 1 UI Total PO=0 bug, re-run: pytest /app/backend/tests/test_iter5.py -v — all 11 should pass. Also do quick UI check: open Staffing dialog on N10036, verify 'Total PO: 50' (not 0). N10036 existing test data is intact and shows Komplit SPK badge correctly.",
+  "rca_of_the_issue": "The developer added qty_staffed handling to update_po, update_staffing, delete_staffing, and get_rekap_all_po but overlooked the two POST endpoints (create_po and create_staffing) — the two entry points that would establish the field in the first place. Frontend selectPO reuses the same 'qty' key for both the PO-original qty and the user-input qty, causing the Total PO label to display 0."
+}
