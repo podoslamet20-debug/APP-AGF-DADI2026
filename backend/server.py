@@ -648,8 +648,9 @@ async def update_progres(progres: ProgresUpdate, user: dict = Depends(get_curren
             {"$set": doc}
         )
     else:
-        await db.progres.insert_one(doc)
+        result = await db.progres.insert_one(doc)
     
+    doc.pop("_id", None)
     return doc
 
 @api_router.get("/progres")
@@ -672,8 +673,8 @@ async def get_rekap_all_po(user: dict = Depends(get_current_user)):
     for po in pos:
         for item in po.get("items", []):
             staffing_qty = sum(
-                si["qty"] for s in staffing if s["po_id"] == po.get("po_id", "")
-                for si in s.get("items", []) if si["barang_id"] == item["barang_id"]
+                si["qty"] for s in staffing if s.get("po_id") == po["_id"]
+                for si in s.get("items", []) if si.get("barang_id") == item.get("barang_id")
             )
             remaining = item["qty"] - staffing_qty
             result.append({
