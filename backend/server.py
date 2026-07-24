@@ -781,9 +781,12 @@ async def update_progres(progres: ProgresUpdate, user: dict = Depends(get_curren
                 if item.get("barang_id") == progres.item_id:
                     qty_masuk += item.get("qty_diterima", 0) or 0
     
-    # Enforce all stage qtys cannot exceed qty_masuk (received). Also enforce logical order: packing ≤ finishing ≤ servis ≤ grinda ≤ qty_masuk
+    # Enforce all stage qtys cannot exceed qty_masuk (received) when linked to a PO.
+    # In manual mode (no po_id / no barang_masuk yet), stages persist as-entered without capping.
+    is_manual = not key_po or qty_masuk == 0
     def _cap(v):
-        return min(max(v or 0, 0), qty_masuk) if qty_masuk > 0 else 0
+        v = max(v or 0, 0)
+        return v if is_manual else min(v, qty_masuk)
     grinda = _cap(progres.grinda)
     servis = _cap(progres.servis)
     finishing = _cap(progres.finishing)

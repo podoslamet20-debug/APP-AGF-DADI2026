@@ -16,6 +16,13 @@ Aplikasi rekap data barang furniture "AGFDATA" - Database Barang, PO, Barang Mas
 
 ## Implementation Log
 
+### Iteration 8 (Feb 2026) - Progres Barang Input Dialog + Tanggal
+- **New "Tambah Progres" dialog** on Progres Barang page with source toggle: Dari PO (cascading dropdown PO → Barang, auto-fills metadata) or Manual (barang from full DB, editable overrides)
+- **Tanggal field** (`tanggal: Optional[str]`) added to `ProgresUpdate` model; defaults to today UTC; saved in progres doc; returned in `/api/progres/by-po`; shown as badge with calendar icon on each item card
+- **All 4 stages (grinda/servis/finishing/packing) capped by qty_masuk** on the server when linked to a PO (previously only packing). Manual mode (no po_id) persists stage values as-entered — no silent zeroing
+- **Existing inline table + edit preserved** (per user request "tabel sudah sesuai dan pertahankan")
+- Tests: 16/16 backend pass (test_iter8.py) + full frontend flow verified
+
 ### Iteration 7 (Feb 2026) - Staffing-by-Ready + PO Totals + SPK Pengrajin/Note + Multi-Pengrajin Barang
 - **Staffing dilimit oleh qty_ready (packing dari Progres)**: `/api/po*` now returns `qty_ready` per item (sum of `progres.packing`). `create_staffing` & `update_staffing` cap qty by `min(qty_po - staffed, qty_ready - staffed)` and return HTTP 400 with `Ready: X ... sisa: Y`. Frontend Staffing dialog shows Ready label + caps input.
 - **PO subtotal + grand total**: UI shows `qty × harga_jual` per item and Grand Total per PO card. Detail modal shows itemized subtotal + Grand Total banner. PDF export table now has Harga Jual + Subtotal columns + Grand Total row.
