@@ -43,8 +43,6 @@ export default function RekapData() {
 
   useEffect(() => { load(); }, [filterTanggal, filterNoPO]);
 
-  useEffect(() => { load(); }, [filterTanggal]);
-
   const exportPO = (format) => {
     const data = rekapPO.map(r => ({
       "No PO": r.no_po,

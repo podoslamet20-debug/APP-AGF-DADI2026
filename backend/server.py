@@ -640,7 +640,8 @@ async def update_progres(progres: ProgresUpdate, user: dict = Depends(get_curren
                 if item.get("barang_id") == progres.item_id:
                     qty_masuk += item.get("qty_diterima", 0) or 0
     
-    packing = min(progres.packing or 0, qty_masuk) if qty_masuk > 0 else (progres.packing or 0)
+    packing = min(progres.packing or 0, qty_masuk) if qty_masuk > 0 else 0
+    # If qty_masuk is 0 (no barang_masuk yet), packing must be 0
     
     existing = await db.progres.find_one(query_key)
     
@@ -815,8 +816,9 @@ async def export_progres_pdf(tanggal: Optional[str] = None, user: dict = Depends
 
 # ===== Rekap Data Routes =====
 @api_router.get("/rekap/all-po")
-async def get_rekap_all_po(user: dict = Depends(get_current_user)):
-    pos = await db.po.find({}).to_list(1000)
+async def get_rekap_all_po(no_po: Optional[str] = None, user: dict = Depends(get_current_user)):
+    query = {"no_po": no_po} if no_po else {}
+    pos = await db.po.find(query).to_list(1000)
     staffing = await db.staffing.find({}).to_list(1000)
     for p in pos: p["_id"] = str(p["_id"])
     for s in staffing: s["_id"] = str(s["_id"])

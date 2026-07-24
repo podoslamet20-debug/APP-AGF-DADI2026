@@ -10,98 +10,80 @@ Aplikasi rekap data barang furniture "AGFDATA" dengan menu Database Barang, PO, 
 - **Exports**: ReportLab (PDF with images), pandas + xlsxwriter (Excel), XLSX.js (CSV/Excel)
 
 ## User Personas
-1. **Admin**: Full access to all modules including CRUD, pricing, craftsman data, and user management
-2. **Staff**: Can edit Barang Masuk, Staffing, and Progres Barang. Prices are hidden.
-3. **Tamu (Guest)**: View-only access. Prices and craftsman names are hidden.
+1. **Admin**: Full access, user management, all filters
+2. **Staff**: Edit Barang Masuk/Staffing/Progres, prices hidden, all filters
+3. **Tamu (Guest)**: View-only, prices + craftsman hidden, all filters usable
 
 ## Test Credentials
 - Admin: admin@agfdata.com / admin123
 - Staff: staff@agfdata.com / staff123
 - Tamu: tamu@agfdata.com / tamu123
 
-## What's Been Implemented
+## Implementation History
 
 ### Iteration 1 (Feb 2026 - MVP)
-- [x] JWT authentication with role-based access control
-- [x] Database Barang: CRUD + image upload + search/filter
-- [x] PO (Purchase Order): Multi-item, auto-fill from Barang DB, edit, PDF export, search
-- [x] Barang Masuk: Auto-fill from PO, qty tracking (updates PO qty_diterima)
-- [x] Staffing: Auto-fill from PO, date-based tracking
-- [x] SPK: Multi-item, auto-fill, edit, PDF export with signature area
-- [x] Progres Barang: Grinda → Servis → Finishing → Packing with "KOMPLIT" badge
-- [x] Rekap Data: 3 tabs (PO/Pengrajin/Staffing) with CSV/Excel export
-- [x] Role-based UI hiding (prices for staff/guest, craftsmen for guest)
-- [x] Mobile responsive layout
+- Auth, RBAC, 7 core modules (Barang/PO/BM/Staffing/SPK/Progres/Rekap), image upload, exports, mobile responsive
 
 ### Iteration 2 (Feb 2026 - Enhancements)
-- [x] User Management: Full CRUD for admin/staff/tamu users (admin-only)
-- [x] Delete endpoints for ALL resources (barang, PO, BM, staffing, SPK) with confirmation dialogs
-- [x] Edit functionality for ALL menus (barang, BM, staffing added)
-- [x] Search for ALL menus (BM, staffing added)
-- [x] Preview modals for ALL menus (barang, BM, staffing, SPK detail dialogs)
-- [x] SPK auto-fill from PO: "Import dari PO" dropdown loads items with pengrajin, harga, foto
-- [x] SPK PDF: Includes photos + signature area for owner & pengrajin + payment notes
-- [x] PDF exports for Barang Masuk & Staffing (new)
-- [x] All PDFs now include product photos with branded header
-- [x] Rekap Data expanded to 5 tabs: Rekap PO, Per Barang, Progres, Per Pengrajin, Staffing
-- [x] "Remaining" renamed to "Kurang Kirim" in Rekap PO
-- [x] Rekap Per Barang: Barang Masuk - Progres Packing
-- [x] Rekap Progres: Full tracking with KOMPLIT/PROSES badges
-- [x] Client-side route guard: non-admin users redirected from /users
+- User Management CRUD, Delete/Edit/Search/Preview across all resources
+- SPK auto-fill from PO, PDF with images + signature area
+- Rekap: 5 tabs (PO/Per Barang/Progres/Pengrajin/Staffing)
+- "Remaining" → "Kurang Kirim"
+
+### Iteration 3 (Feb 2026 - Progres Refactor + Filters)
+- Progres Barang: PO-based grouping (`GET /api/progres/by-po`), syncs from barang masuk
+- Packing qty capped at qty_masuk (auto-clamped when qty_masuk=0)
+- Progres PDF export with optional tanggal filter (`GET /api/export/progres/pdf?tanggal=YYYY-MM-DD`)
+- Print CSS: hides sidebar/header/buttons on `window.print()`
+- Barang Masuk: checkbox to select which items to include from PO
+- Rekap PO: Filter dropdown by No PO (`?no_po=X`)
+- Rekap Per Barang: Also filters by no_po
+- DELETE endpoints return proper 404 with detail message
+- All filters accessible to admin/staff/guest
 
 ## Backlog
 
-### P1 (Enhancements)
-- Print CSS separate for print pages (currently PDF only)
-- Charts/visualizations in Rekap Data (Recharts installed)
-- Notifications for near-complete PO deliveries
-- Bulk import from Excel
+### P1
+- Split server.py (~1415 lines) into router modules (backend/routers/)
+- MongoDB aggregation pipelines for rekap queries (currently O(n²) Python joins)
+- Charts/visualizations in Rekap Data
 
-### P2 (Future)
+### P2
+- One-time migration to normalize legacy progres records (empty po_id)
+- WhatsApp/Twilio notifications for pengrajin
+- Barcode/QR scanning for check-in
 - Multi-file image gallery per barang
-- Advanced filtering (date range, status)
-- Audit log for admin actions
-- Real-time updates via websockets
-- WhatsApp notification integration to craftsmen (via Twilio)
+- Audit log
 
 ## API Endpoints Summary
 ### Auth
-- POST /api/auth/login, GET /api/auth/me, POST /api/auth/logout
+POST /api/auth/login, GET /api/auth/me, POST /api/auth/logout
 
-### File Upload
-- POST /api/upload, GET /api/files/{path}
+### File Upload/Download
+POST /api/upload, GET /api/files/{path}
 
-### Barang
-- GET/POST/PUT/DELETE /api/barang (with search)
-
-### PO
-- GET/POST/PUT/DELETE /api/po (with search)
-
-### Barang Masuk
-- GET/POST/PUT/DELETE /api/barang-masuk
-
-### Staffing
-- GET/POST/PUT/DELETE /api/staffing (filter by tanggal)
-
-### SPK
-- GET/POST/PUT/DELETE /api/spk (with search)
+### Resources (CRUD)
+- /api/barang (search)
+- /api/po (search)
+- /api/barang-masuk
+- /api/staffing (filter tanggal)
+- /api/spk (search)
+- /api/users (admin only)
 
 ### Progres
-- GET/POST /api/progres
+GET/POST /api/progres, GET /api/progres/by-po
 
 ### Rekap
-- GET /api/rekap/all-po
+- GET /api/rekap/all-po?no_po=X
 - GET /api/rekap/per-pengrajin
-- GET /api/rekap/per-barang
+- GET /api/rekap/per-barang?no_po=X
 - GET /api/rekap/progres
-- GET /api/rekap/staffing-detail
-
-### Users (admin only)
-- GET/POST/PUT/DELETE /api/users
+- GET /api/rekap/staffing-detail?tanggal_from&tanggal_to
 
 ### Exports
 - GET /api/export/po/{id}/pdf
 - GET /api/export/spk/{id}/pdf
 - GET /api/export/barang-masuk/{id}/pdf
 - GET /api/export/staffing/{id}/pdf
+- GET /api/export/progres/pdf?tanggal=YYYY-MM-DD
 - GET /api/export/barang-masuk/excel
