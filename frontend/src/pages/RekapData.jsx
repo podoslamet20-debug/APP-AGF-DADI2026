@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Download, Package } from "lucide-react";
 import * as XLSX from "xlsx";
 import { saveAs } from "file-saver";
@@ -17,24 +18,30 @@ export default function RekapData() {
   const [rekapBarang, setRekapBarang] = useState([]);
   const [rekapProgres, setRekapProgres] = useState([]);
   const [staffing, setStaffing] = useState([]);
+  const [poList, setPoList] = useState([]);
   const [filterTanggal, setFilterTanggal] = useState("");
+  const [filterNoPO, setFilterNoPO] = useState("all");
 
   const load = async () => {
     try {
-      const [poRes, pgRes, brRes, prRes, stRes] = await Promise.all([
-        axios.get(`${API}/rekap/all-po`),
+      const [poRes, pgRes, brRes, prRes, stRes, poListRes] = await Promise.all([
+        axios.get(`${API}/rekap/all-po${filterNoPO !== "all" ? `?no_po=${filterNoPO}` : ""}`),
         !isGuest ? axios.get(`${API}/rekap/per-pengrajin`) : Promise.resolve({ data: [] }),
         axios.get(`${API}/rekap/per-barang`),
         axios.get(`${API}/rekap/progres`),
         axios.get(`${API}/staffing${filterTanggal ? `?tanggal=${filterTanggal}` : ""}`),
+        axios.get(`${API}/po`),
       ]);
       setRekapPO(poRes.data);
       setRekapPengrajin(pgRes.data);
       setRekapBarang(brRes.data);
       setRekapProgres(prRes.data);
       setStaffing(stRes.data);
+      setPoList(poListRes.data);
     } catch (e) { console.error(e); }
   };
+
+  useEffect(() => { load(); }, [filterTanggal, filterNoPO]);
 
   useEffect(() => { load(); }, [filterTanggal]);
 
@@ -137,7 +144,17 @@ export default function RekapData() {
           <Card className="p-6 border border-[#E5E5E5]">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
               <h2 className="text-xl font-bold text-[#1A1A1A]" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>Rekap Semua PO</h2>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap items-end">
+                <div>
+                  <Label className="text-xs">Filter No PO</Label>
+                  <Select value={filterNoPO} onValueChange={setFilterNoPO}>
+                    <SelectTrigger className="w-48" data-testid="filter-no-po"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Semua PO</SelectItem>
+                      {poList.map((p, i) => <SelectItem key={i} value={p.no_po}>{p.no_po}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <Button variant="outline" size="sm" onClick={() => exportPO("csv")} data-testid="export-po-csv"><Download className="w-3 h-3 mr-1" /> CSV</Button>
                 <Button variant="outline" size="sm" onClick={() => exportPO("xlsx")} data-testid="export-po-xlsx"><Download className="w-3 h-3 mr-1" /> Excel</Button>
               </div>

@@ -169,7 +169,8 @@ class SPKCreate(BaseModel):
     deadline: str
 
 class ProgresUpdate(BaseModel):
-    barang_masuk_id: str
+    po_id: Optional[str] = None
+    barang_masuk_id: Optional[str] = None
     item_id: str
     grinda: Optional[int] = 0
     servis: Optional[int] = 0
@@ -626,32 +627,113 @@ async def update_progres(progres: ProgresUpdate, user: dict = Depends(get_curren
     if user["role"] not in ["admin", "staff"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    # Check if progres exists
-    existing = await db.progres.find_one({
-        "barang_masuk_id": progres.barang_masuk_id,
-        "item_id": progres.item_id
-    })
+    # Use po_id + item_id as the key (progres tracks per PO+barang)
+    key_po = progres.po_id or ""
+    query_key = {"po_id": key_po, "item_id": progres.item_id}
+    
+    # Enforce packing max = qty barang masuk aggregated for this PO+barang
+    qty_masuk = 0
+    if key_po:
+        bm_records = await db.barang_masuk.find({"po_id": key_po}).to_list(1000)
+        for bm in bm_records:
+            for item in bm.get("items", []):
+                if item.get("barang_id") == progres.item_id:
+                    qty_masuk += item.get("qty_diterima", 0) or 0
+    
+    packing = min(progres.packing or 0, qty_masuk) if qty_masuk > 0 else (progres.packing or 0)
+    
+    existing = await db.progres.find_one(query_key)
     
     doc = {
-        "barang_masuk_id": progres.barang_masuk_id,
+        "po_id": key_po,
+        "barang_masuk_id": progres.barang_masuk_id or "",
         "item_id": progres.item_id,
-        "grinda": progres.grinda,
-        "servis": progres.servis,
-        "finishing": progres.finishing,
-        "packing": progres.packing,
+        "grinda": progres.grinda or 0,
+        "servis": progres.servis or 0,
+        "finishing": progres.finishing or 0,
+        "packing": packing,
+        "qty_masuk": qty_masuk,
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     
     if existing:
-        await db.progres.update_one(
-            {"barang_masuk_id": progres.barang_masuk_id, "item_id": progres.item_id},
-            {"$set": doc}
-        )
+        await db.progres.update_one(query_key, {"$set": doc})
     else:
-        result = await db.progres.insert_one(doc)
+        await db.progres.insert_one(doc)
     
     doc.pop("_id", None)
     return doc
+
+
+@api_router.get("/progres/by-po")
+async def get_progres_by_po(user: dict = Depends(get_current_user)):
+    """Return progres grouped by PO with barang data synced from barang_masuk."""
+    pos = await db.po.find({}).to_list(1000)
+    barang_masuk = await db.barang_masuk.find({}).to_list(1000)
+    progres_records = await db.progres.find({}).to_list(1000)
+    
+    # Aggregate qty_masuk per PO+barang
+    bm_agg = {}
+    for bm in barang_masuk:
+        po_id = bm.get("po_id", "")
+        for item in bm.get("items", []):
+            bid = item.get("barang_id")
+            if not bid:
+                continue
+            k = f"{po_id}_{bid}"
+            if k not in bm_agg:
+                bm_agg[k] = {
+                    "nama_barang": item.get("nama_barang", ""),
+                    "spesifikasi": item.get("spesifikasi", ""),
+                    "nama_pengrajin": item.get("nama_pengrajin", ""),
+                    "gambar_path": item.get("gambar_path"),
+                    "qty_masuk": 0,
+                }
+            bm_agg[k]["qty_masuk"] += item.get("qty_diterima", 0) or 0
+    
+    # Map progres
+    prog_map = {f"{p.get('po_id','')}_{p.get('item_id')}": p for p in progres_records}
+    
+    # Build response per PO
+    result = []
+    for po in pos:
+        po_id = str(po["_id"])
+        po_items = []
+        for item in po.get("items", []):
+            bid = item.get("barang_id")
+            k = f"{po_id}_{bid}"
+            bm_data = bm_agg.get(k)
+            if not bm_data:
+                continue  # only include items already received in barang_masuk
+            pr = prog_map.get(k, {"grinda": 0, "servis": 0, "finishing": 0, "packing": 0})
+            packing = pr.get("packing", 0) or 0
+            po_items.append({
+                "barang_id": bid,
+                "nama_barang": bm_data["nama_barang"],
+                "spesifikasi": bm_data["spesifikasi"],
+                "nama_pengrajin": bm_data["nama_pengrajin"],
+                "gambar_path": bm_data["gambar_path"],
+                "qty_masuk": bm_data["qty_masuk"],
+                "grinda": pr.get("grinda", 0) or 0,
+                "servis": pr.get("servis", 0) or 0,
+                "finishing": pr.get("finishing", 0) or 0,
+                "packing": packing,
+                "komplit": packing >= bm_data["qty_masuk"] and bm_data["qty_masuk"] > 0,
+            })
+        if po_items:
+            result.append({
+                "po_id": po_id,
+                "no_po": po["no_po"],
+                "items": po_items,
+            })
+    
+    if user["role"] == "guest":
+        for po in result:
+            for it in po["items"]:
+                it.pop("nama_pengrajin", None)
+    
+    return result
+
 
 @api_router.get("/progres")
 async def get_progres(user: dict = Depends(get_current_user)):
@@ -659,6 +741,77 @@ async def get_progres(user: dict = Depends(get_current_user)):
     for item in items:
         item["_id"] = str(item["_id"])
     return items
+
+
+@api_router.get("/export/progres/pdf")
+async def export_progres_pdf(tanggal: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """Export progres to PDF, optionally filtered by tanggal (updated_at date prefix)."""
+    query = {}
+    if tanggal:
+        query["updated_at"] = {"$regex": f"^{tanggal}"}
+    progres_records = await db.progres.find(query).to_list(1000)
+    
+    # Enrich with barang info
+    bm_records = await db.barang_masuk.find({}).to_list(1000)
+    bm_agg = {}
+    for bm in bm_records:
+        po_id = bm.get("po_id", "")
+        for item in bm.get("items", []):
+            bid = item.get("barang_id")
+            if not bid: continue
+            k = f"{po_id}_{bid}"
+            if k not in bm_agg:
+                bm_agg[k] = {
+                    "no_po": bm.get("no_po", ""),
+                    "nama_barang": item.get("nama_barang", ""),
+                    "nama_pengrajin": item.get("nama_pengrajin", ""),
+                    "gambar_path": item.get("gambar_path"),
+                    "qty_masuk": 0,
+                }
+            bm_agg[k]["qty_masuk"] += item.get("qty_diterima", 0) or 0
+    
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm)
+    story = []
+    styles = getSampleStyleSheet()
+    subtitle = f"Filter Tanggal: {tanggal}" if tanggal else "Semua Progres"
+    _brand_header(story, "REKAP PROGRES BARANG", subtitle, styles)
+    body_style = ParagraphStyle('body', parent=styles["BodyText"], fontSize=9, leading=11)
+    data = [["Foto", "No PO", "Nama Barang", "Pengrajin", "Masuk", "Grinda", "Servis", "Finishing", "Packing", "Status"]]
+    for p in progres_records:
+        k = f"{p.get('po_id','')}_{p.get('item_id')}"
+        info = bm_agg.get(k, {})
+        img = _fetch_image_flowable(info.get("gambar_path"), 18) or Paragraph("-", body_style)
+        packing = p.get("packing", 0) or 0
+        qty_masuk = info.get("qty_masuk", 0)
+        status = "KOMPLIT" if packing >= qty_masuk and qty_masuk > 0 else "PROSES"
+        data.append([
+            img,
+            info.get("no_po", ""),
+            Paragraph(info.get("nama_barang", ""), body_style),
+            Paragraph(info.get("nama_pengrajin", ""), body_style),
+            str(qty_masuk),
+            str(p.get("grinda", 0) or 0),
+            str(p.get("servis", 0) or 0),
+            str(p.get("finishing", 0) or 0),
+            str(packing),
+            status,
+        ])
+    table = Table(data, repeatRows=1, colWidths=[16*mm, 22*mm, 34*mm, 26*mm, 12*mm, 14*mm, 14*mm, 16*mm, 14*mm, 16*mm])
+    table.setStyle(TableStyle([
+        ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E5E5E5")),
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#8B5A2B")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0), (-1,-1), 8),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("ALIGN", (4,1), (-1,-1), "CENTER"),
+    ]))
+    story.append(table)
+    doc.build(story)
+    buffer.seek(0)
+    filename = f"progres-{tanggal or 'all'}.pdf"
+    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 # ===== Rekap Data Routes =====
 @api_router.get("/rekap/all-po")
@@ -975,7 +1128,9 @@ async def update_barang(barang_id: str, barang: BarangCreate, user: dict = Depen
 async def delete_barang(barang_id: str, user: dict = Depends(get_current_user)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
-    await db.barang.delete_one({"_id": ObjectId(barang_id)})
+    result = await db.barang.delete_one({"_id": ObjectId(barang_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Barang not found")
     return {"message": "Barang deleted"}
 
 
@@ -983,7 +1138,9 @@ async def delete_barang(barang_id: str, user: dict = Depends(get_current_user)):
 async def delete_po(po_id: str, user: dict = Depends(get_current_user)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
-    await db.po.delete_one({"_id": ObjectId(po_id)})
+    result = await db.po.delete_one({"_id": ObjectId(po_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="PO not found")
     return {"message": "PO deleted"}
 
 
@@ -1009,9 +1166,13 @@ async def delete_bm(bm_id: str, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin", "staff"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     old = await db.barang_masuk.find_one({"_id": ObjectId(bm_id)})
-    if old:
-        for item in old.get("items", []):
+    if not old:
+        raise HTTPException(status_code=404, detail="Barang masuk not found")
+    for item in old.get("items", []):
+        try:
             await db.po.update_one({"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]}, {"$inc": {"items.$.qty_diterima": -item.get("qty_diterima", 0)}})
+        except Exception:
+            pass
     await db.barang_masuk.delete_one({"_id": ObjectId(bm_id)})
     return {"message": "Barang masuk deleted"}
 
@@ -1030,7 +1191,9 @@ async def update_staffing(st_id: str, staffing: StaffingCreate, user: dict = Dep
 async def delete_staffing(st_id: str, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin", "staff"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    await db.staffing.delete_one({"_id": ObjectId(st_id)})
+    result = await db.staffing.delete_one({"_id": ObjectId(st_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Staffing not found")
     return {"message": "Staffing deleted"}
 
 
@@ -1038,7 +1201,9 @@ async def delete_staffing(st_id: str, user: dict = Depends(get_current_user)):
 async def delete_spk(spk_id: str, user: dict = Depends(get_current_user)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
-    await db.spk.delete_one({"_id": ObjectId(spk_id)})
+    result = await db.spk.delete_one({"_id": ObjectId(spk_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="SPK not found")
     return {"message": "SPK deleted"}
 
 
@@ -1111,7 +1276,9 @@ async def delete_user(user_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Not authorized")
     if user_id == user["_id"]:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    await db.users.delete_one({"_id": ObjectId(user_id)})
+    result = await db.users.delete_one({"_id": ObjectId(user_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
     return {"message": "User deleted"}
 
 
@@ -1157,35 +1324,46 @@ async def get_rekap_per_barang(user: dict = Depends(get_current_user)):
 
 @api_router.get("/rekap/progres")
 async def get_rekap_progres(user: dict = Depends(get_current_user)):
-    """Rekap progres: gabungan barang masuk dengan status progres."""
+    """Rekap progres berdasarkan PO+barang dengan qty_masuk aggregate."""
+    pos = await db.po.find({}).to_list(1000)
     barang_masuk = await db.barang_masuk.find({}).to_list(1000)
-    progres = await db.progres.find({}).to_list(1000)
-
-    # Progres map by (bm_id, item_id) - but progres already stored per barang_masuk_id
-    prog_map = {}
-    for p in progres:
-        prog_map[f"{p['barang_masuk_id']}_{p['item_id']}"] = p
-
-    result = []
+    progres_records = await db.progres.find({}).to_list(1000)
+    
+    bm_agg = {}
     for bm in barang_masuk:
-        bm_id = str(bm["_id"])
+        po_id = bm.get("po_id", "")
         for item in bm.get("items", []):
-            key = f"{bm_id}_{item.get('barang_id')}"
-            pr = prog_map.get(key, {"grinda": 0, "servis": 0, "finishing": 0, "packing": 0})
-            qty = item.get("qty_diterima", 0)
-            packing = pr.get("packing", 0) or 0
-            result.append({
-                "no_po": bm.get("no_po", ""),
-                "nama_barang": item.get("nama_barang", ""),
-                "nama_pengrajin": item.get("nama_pengrajin", ""),
-                "gambar_path": item.get("gambar_path"),
-                "qty_masuk": qty,
-                "grinda": pr.get("grinda", 0) or 0,
-                "servis": pr.get("servis", 0) or 0,
-                "finishing": pr.get("finishing", 0) or 0,
-                "packing": packing,
-                "komplit": packing >= qty and qty > 0,
-            })
+            bid = item.get("barang_id")
+            if not bid: continue
+            k = f"{po_id}_{bid}"
+            if k not in bm_agg:
+                bm_agg[k] = {
+                    "no_po": bm.get("no_po", ""),
+                    "nama_barang": item.get("nama_barang", ""),
+                    "nama_pengrajin": item.get("nama_pengrajin", ""),
+                    "gambar_path": item.get("gambar_path"),
+                    "qty_masuk": 0,
+                }
+            bm_agg[k]["qty_masuk"] += item.get("qty_diterima", 0) or 0
+    
+    prog_map = {f"{p.get('po_id','')}_{p.get('item_id')}": p for p in progres_records}
+    
+    result = []
+    for k, info in bm_agg.items():
+        pr = prog_map.get(k, {"grinda": 0, "servis": 0, "finishing": 0, "packing": 0})
+        packing = pr.get("packing", 0) or 0
+        result.append({
+            "no_po": info["no_po"],
+            "nama_barang": info["nama_barang"],
+            "nama_pengrajin": info["nama_pengrajin"],
+            "gambar_path": info["gambar_path"],
+            "qty_masuk": info["qty_masuk"],
+            "grinda": pr.get("grinda", 0) or 0,
+            "servis": pr.get("servis", 0) or 0,
+            "finishing": pr.get("finishing", 0) or 0,
+            "packing": packing,
+            "komplit": packing >= info["qty_masuk"] and info["qty_masuk"] > 0,
+        })
     if user["role"] == "guest":
         for r in result:
             r.pop("nama_pengrajin", None)

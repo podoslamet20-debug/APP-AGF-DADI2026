@@ -43,8 +43,14 @@ export default function BarangMasuk() {
     setForm({
       ...form,
       po_id: poId,
-      items: po.items.map(i => ({ ...i, qty_diterima: 0 }))
+      items: po.items.map(i => ({ ...i, qty_diterima: 0, _selected: true }))
     });
+  };
+
+  const toggleItem = (idx) => {
+    const items = [...form.items];
+    items[idx]._selected = !items[idx]._selected;
+    setForm({ ...form, items });
   };
 
   const updateQty = (idx, qty) => {
@@ -58,12 +64,19 @@ export default function BarangMasuk() {
       toast.error("Isi semua field wajib");
       return;
     }
+    // Only include items with _selected=true (or true by default) and qty_diterima > 0
+    const filteredItems = form.items.filter(i => i._selected !== false && (i.qty_diterima || 0) > 0).map(({_selected, ...rest}) => rest);
+    if (filteredItems.length === 0) {
+      toast.error("Pilih minimal 1 barang dengan qty > 0");
+      return;
+    }
+    const payload = { ...form, items: filteredItems };
     try {
       if (editingId) {
-        await axios.put(`${API}/barang-masuk/${editingId}`, form);
+        await axios.put(`${API}/barang-masuk/${editingId}`, payload);
         toast.success("Barang masuk berhasil diupdate");
       } else {
-        await axios.post(`${API}/barang-masuk`, form);
+        await axios.post(`${API}/barang-masuk`, payload);
         toast.success("Barang masuk berhasil dicatat");
       }
       setOpen(false);
@@ -135,10 +148,17 @@ export default function BarangMasuk() {
                   </div>
                   {selectedPO && (
                     <div>
-                      <Label>Barang dari PO</Label>
+                      <Label>Pilih Barang yang Masuk <span className="text-xs text-[#5C5C5C]">(centang untuk memilih)</span></Label>
                       <div className="space-y-2 mt-2">
                         {form.items.map((item, idx) => (
-                          <div key={idx} className="p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5] flex gap-3">
+                          <div key={idx} className={`p-3 rounded-md border flex gap-3 ${item._selected !== false ? 'bg-[#FAFAFA] border-[#E5E5E5]' : 'bg-gray-100 border-gray-200 opacity-60'}`}>
+                            <input
+                              type="checkbox"
+                              checked={item._selected !== false}
+                              onChange={() => toggleItem(idx)}
+                              data-testid={`bm-select-${idx}`}
+                              className="mt-2 w-4 h-4 accent-[#8B5A2B]"
+                            />
                             {item.gambar_path && <img src={`${API}/files/${item.gambar_path}`} className="w-14 h-14 object-cover rounded" alt="" />}
                             <div className="flex-1">
                               <p className="font-medium text-sm">{item.nama_barang}</p>
@@ -147,7 +167,7 @@ export default function BarangMasuk() {
                             </div>
                             <div className="w-24">
                               <Label className="text-xs">Qty Terima</Label>
-                              <Input type="number" data-testid={`bm-qty-${idx}`} value={item.qty_diterima} onChange={(e) => updateQty(idx, e.target.value)} />
+                              <Input type="number" data-testid={`bm-qty-${idx}`} value={item.qty_diterima} onChange={(e) => updateQty(idx, e.target.value)} disabled={item._selected === false} />
                             </div>
                           </div>
                         ))}

@@ -76,6 +76,58 @@ code {
     background: #8B5A2B;
 }
 
+/* ========== Print Styles ========== */
+@media print {
+    @page {
+        size: A4;
+        margin: 12mm;
+    }
+    body {
+        background: white !important;
+        color: black !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    aside, header, nav, .print\:hidden, button {
+        display: none !important;
+    }
+    main {
+        padding: 0 !important;
+    }
+    .print-header {
+        display: block !important;
+        border-bottom: 2px solid #8B5A2B;
+        padding-bottom: 8px;
+        margin-bottom: 12px;
+    }
+    [role="tablist"] {
+        display: none !important;
+    }
+    table {
+        page-break-inside: auto;
+        border-collapse: collapse;
+        width: 100%;
+    }
+    tr {
+        page-break-inside: avoid;
+        page-break-after: auto;
+    }
+    thead {
+        display: table-header-group;
+    }
+    thead th {
+        background: #8B5A2B !important;
+        color: white !important;
+        -webkit-print-color-adjust: exact;
+    }
+    .shadow, .shadow-md, .shadow-sm {
+        box-shadow: none !important;
+    }
+    input, select, textarea {
+        border: 1px solid #ccc !important;
+    }
+}
+
 @layer base {
     [data-debug-wrapper="true"] {
         display: contents !important;

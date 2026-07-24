@@ -1,0 +1,76 @@
+{
+  "summary": "Iteration 3 testing complete. Backend: 22/24 new iter3 tests + 70/70 regression (iter1+iter2) = 92/94 passing (97.9%). Frontend smoke-tested new Progres PO-grouping, Filter PO dropdown, PDF/Print buttons, packing max enforcement, Rekap Filter No PO dropdown - all render correctly. ONE CRITICAL BACKEND BUG: GET /api/rekap/all-po does NOT accept a `no_po` query param, so server-side filtering is a NO-OP (endpoint returns all PO rows regardless of no_po). Frontend sends the param but backend ignores it, so 'Filter No PO' dropdown does NOT actually filter results.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/rekap/all-po?no_po=X",
+        "issue": "Endpoint signature has NO `no_po` query param (server.py:817 - `async def get_rekap_all_po(user: dict = Depends(get_current_user))`). FastAPI silently ignores the `no_po` query string and returns ALL PO rows. The frontend RekapData.jsx sends `?no_po=<value>` but the backend does not filter. Fix: add `no_po: Optional[str] = None` param and filter `if no_po: result = [r for r in result if r['no_po'] == no_po]` (or filter at Mongo query level).",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/progres",
+        "issue": "Packing cap logic (line 643) uses `min(...) if qty_masuk > 0 else raw`. If qty_masuk=0 (no barang_masuk yet), packing is stored as raw user input, which can be arbitrarily high — inconsistent with UI's max=0 constraint. Consider clamping to 0 when qty_masuk=0, OR reject the request."
+      },
+      {
+        "endpoint": "GET /api/progres",
+        "issue": "Still lists ALL progres records including legacy ones with po_id='' and stale item_id like 'test_item_1' (leftover from iter1 tests). These orphan records show up in /rekap/progres and /export/progres/pdf but not in /progres/by-po (filtered by PO). Consider adding a cleanup or ignoring records with empty po_id."
+      },
+      {
+        "endpoint": "GET /api/rekap/per-barang",
+        "issue": "Aggregates progres by `item_id` which is the barang_id — cross-PO packing amounts are summed together for the same barang_id. May over-count if the same barang appears in multiple POs. Consider aggregating by (po_id, barang_id) if per-PO accuracy is required."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Rekap Data → Filter No PO",
+        "issue": "Selecting a PO from the 'Filter No PO' dropdown triggers a reload with ?no_po=<value>, but backend does not filter, so the table shows all POs (no visible effect). See critical backend bug above.",
+        "affected_selectors": ["[data-testid='filter-no-po']", "[data-testid^='rekap-po-row-']"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Progres Barang - item cards",
+        "issues": [
+          "When gambar_path is missing, the item text (name/pengrajin/spec) stacks vertically without a leading placeholder image, breaking the visual grid (see napeleon/Kopitiam Stool rows). The placeholder <div> exists but only for `w-full md:w-24 h-24` which on narrow columns collapses. Minor cosmetic.",
+          "The four progres stage inputs (Grinda/Servis/Finishing/Packing) fit in a 4-column grid on desktop — labels are clear and color-coded. OK."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter3.py",
+    "/app/backend/tests/test_iter2.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter3_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Add `no_po: Optional[str] = None` param to GET /api/rekap/all-po and filter results server-side (server.py:817). This is a 3-line change and blocks the iter3 Filter No PO feature.",
+    "Optional: clamp packing to 0 when qty_masuk=0 in POST /api/progres for consistency with UI.",
+    "Optional: purge legacy progres records with po_id='' (e.g. leftover from iter1 test 'test_item_1') or add index/cleanup script.",
+    "Optional: remove the duplicate useEffect in RekapData.jsx (lines 44 and 46 both depend on filterTanggal, causing 2 reloads on tanggal change)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~1415 lines — strongly recommend splitting into resource routers (auth, barang, po, bm, staffing, spk, progres, rekap, exports, users) using APIRouter modules. File exceeds the 700-line guideline.",
+    "The `/api/rekap/all-po` no_po filter miss is a clear API/frontend contract drift — add integration tests that hit the endpoint with the exact query strings the frontend sends.",
+    "Legacy progres schema mixing (`barang_masuk_id` vs `po_id`) leaves records with empty po_id in the DB that break some aggregate views. Consider a one-time migration `UPDATE progres SET po_id = <lookup from barang_masuk> WHERE po_id = ''`, or add a Pydantic validator that requires po_id going forward.",
+    "In get_progres_by_po (line 669) and get_rekap_progres (line 1326), we do 3 unbounded find({}).to_list(1000) then Python-side joins. For real production scale, use MongoDB aggregation pipelines with $lookup.",
+    "get_rekap_all_po loops nested (O(POs × staffing × items)) — will degrade quickly. Use aggregation with $unwind and $group.",
+    "The rekap all-po code at line 828-833 uses `s.get('po_id') == po['_id']` — good, but only after stringifying `po['_id']` on line 821; ensure staffing.po_id is always a string too (it is, in create_staffing).",
+    "RekapData.jsx has 2 useEffect hooks (lines 44 & 46) both loading data — the second is a subset of the first. Remove line 46."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter3.py (new)"
+  ],
+  "success_rate": {"backend": "97.9% (92/94: iter3 22/24 + iter1&2 regression 70/70)", "frontend": "100% of tested rendering flows; 1 CRITICAL integration issue (no_po filter blocked by backend)"},
+  "test_credentials": "Admin: admin@agfdata.com/admin123, Staff: staff@agfdata.com/staff123, Tamu: tamu@agfdata.com/tamu123 (all verified)",
+  "seed_data_creation": "test_iter3.py created several TEST_iter3_/TEST_ITER3_/TEST_SOLO_/TEST_KOM_ prefixed barang, po, and barang_masuk records for the by-po and packing-max tests. No cleanup; safe to leave as they're all prefixed TEST_.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 3 has 1 critical backend bug (no_po filter missing on /api/rekap/all-po) and several minor cleanup items. Backend pytest coverage: /app/backend/tests/backend_test.py (iter1, 33 tests), test_iter2.py (37 tests), test_iter3.py (24 tests). All new iter3 features (Progres by-po grouping, packing cap, PDF export, DELETE 404 for all 6 endpoints) work correctly except the rekap no_po filter. Frontend Progres/Rekap pages render correctly; the client-side no_po dropdown sends the query param but backend ignores it — retest after the fix by selecting a PO in Rekap → Filter No PO and confirming only that PO's rows show.",
+  "rca_of_the_issue": "no_po filter RCA: server.py line 817-818 signature is `async def get_rekap_all_po(user: dict = Depends(get_current_user)):` — missing `no_po: Optional[str] = None` query param. FastAPI treats undeclared query strings as ignored. Frontend RekapData.jsx line 28 sends `?no_po=<value>` unconditionally, and backend returns full result set. Reproduce: `curl -b cookies.txt '.../api/rekap/all-po?no_po=NONEXISTENT'` — still returns all rows. Fix: change signature to `async def get_rekap_all_po(no_po: Optional[str] = None, user: dict = Depends(get_current_user)):` and add `if no_po: result = [r for r in result if r['no_po'] == no_po]` before returning."
+}
