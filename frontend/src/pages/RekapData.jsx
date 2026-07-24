@@ -47,6 +47,14 @@ export default function RekapData() {
   useEffect(() => { load(); }, [filterTanggal, filterNoPO]);
 
   const exportPO = (format) => {
+    const statusLabel = (r) => {
+      const s = [];
+      if (r.komplit_pengrajin) s.push("Komplit Pengrajin");
+      if (r.komplit_spk) s.push("Komplit SPK");
+      if (r.komplit_terkirim) s.push("Komplit Terkirim");
+      if (r.ready) s.push("Ready");
+      return s.join(", ") || "Proses";
+    };
     const data = rekapPO.map(r => ({
       "No PO": r.no_po,
       "Nama Barang": r.nama_barang,
@@ -54,6 +62,7 @@ export default function RekapData() {
       "Qty PO": r.qty_po,
       "Qty Staffing": r.qty_staffing,
       "Kurang Kirim": r.kurang_kirim,
+      "Status": statusLabel(r),
     }));
     exportData(data, "rekap-po", format);
   };

@@ -97,9 +97,22 @@ export default function BarangMasuk() {
   };
 
   const startEdit = (bm) => {
-    setForm({ po_id: bm.po_id, tanggal_masuk: bm.tanggal_masuk, penerima: bm.penerima, items: bm.items });
+    // Reload from PO to get accurate qty & sisa; subtract this record's contribution from "sudah diterima"
+    const po = pos.find(p => (p._id || p.id) === bm.po_id);
+    const bmMap = new Map((bm.items || []).map(i => [i.barang_id, i]));
+    const items = (po?.items || bm.items || []).map(pi => {
+      const own = bmMap.get(pi.barang_id);
+      const otherReceived = (pi.qty_diterima || 0) - ((own?.qty_diterima) || 0);
+      return {
+        ...pi,
+        qty_diterima: own?.qty_diterima || 0,
+        _selected: !!own,
+        _original_qty_diterima: otherReceived,
+      };
+    });
+    setForm({ po_id: bm.po_id, tanggal_masuk: bm.tanggal_masuk, penerima: bm.penerima, items });
     setEditingId(bm._id);
-    setSelectedPO({ items: bm.items });
+    setSelectedPO(po || { items });
     setOpen(true);
   };
 
@@ -180,11 +193,11 @@ export default function BarangMasuk() {
                             <div className="flex-1">
                               <p className="font-medium text-sm">{item.nama_barang}</p>
                               {canSeeCraftsman && <p className="text-xs text-[#5C5C5C]">{item.nama_pengrajin}</p>}
-                              <p className="text-xs text-[#5C5C5C]">Total PO: {item.qty} | Sudah Diterima: {item.qty_diterima || 0}</p>
+                              <p className="text-xs text-[#5C5C5C]">Total PO: {item.qty} • Sudah Diterima: {item._original_qty_diterima || 0} • <span className={`font-semibold ${(item.qty - (item._original_qty_diterima || 0)) > 0 ? 'text-[#8B5A2B]' : 'text-[#4CAF50]'}`}>Sisa: {(item.qty || 0) - (item._original_qty_diterima || 0)}</span></p>
                             </div>
                             <div className="w-24">
                               <Label className="text-xs">Qty Terima</Label>
-                              <Input type="number" data-testid={`bm-qty-${idx}`} value={item.qty_diterima} onChange={(e) => updateQty(idx, e.target.value)} disabled={item._selected === false} />
+                              <Input type="number" min="0" max={(item.qty || 0) - (item._original_qty_diterima || 0)} data-testid={`bm-qty-${idx}`} value={item.qty_diterima} onChange={(e) => updateQty(idx, e.target.value)} disabled={item._selected === false} />
                             </div>
                           </div>
                         ))}

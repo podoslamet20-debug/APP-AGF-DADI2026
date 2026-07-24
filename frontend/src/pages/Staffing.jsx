@@ -89,9 +89,26 @@ export default function Staffing() {
   };
 
   const startEdit = (st) => {
-    setForm({ po_id: st.po_id, tanggal_keluar: st.tanggal_keluar, items: st.items });
+    const po = pos.find(p => (p._id || p.id) === st.po_id);
+    const stMap = new Map((st.items || []).map(i => [i.barang_id, i]));
+    const items = (po?.items || st.items || []).map(pi => {
+      const own = stMap.get(pi.barang_id);
+      const ownQty = own?.qty || 0;
+      const otherStaffed = (pi.qty_staffed || 0) - ownQty;
+      const sisa = (pi.qty || 0) - otherStaffed;
+      return {
+        ...pi,
+        _original_qty: pi.qty || 0,
+        qty: ownQty,
+        _selected: !!own,
+        _max_qty: sisa,
+        _sisa: sisa,
+        qty_staffed: otherStaffed,
+      };
+    });
+    setForm({ po_id: st.po_id, tanggal_keluar: st.tanggal_keluar, items });
     setEditingId(st._id);
-    setSelectedPO({ items: st.items });
+    setSelectedPO(po || { items });
     setOpen(true);
   };
 

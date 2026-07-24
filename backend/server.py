@@ -150,16 +150,42 @@ class POCreate(BaseModel):
     items: List[POItemCreate]
     catatan: Optional[str] = ""
 
+class BarangMasukItem(BaseModel):
+    barang_id: str
+    qty_diterima: int = Field(ge=0)
+    # Optional passthrough metadata (frontend may include these; ignored server-side for validation)
+    nama_barang: Optional[str] = None
+    nama_pengrajin: Optional[str] = None
+    spesifikasi: Optional[str] = None
+    gambar_path: Optional[str] = None
+    harga_pengrajin: Optional[float] = None
+    harga_jual: Optional[float] = None
+    qty: Optional[int] = None
+    catatan: Optional[str] = None
+
 class BarangMasukCreate(BaseModel):
     po_id: str
     tanggal_masuk: str
     penerima: str
-    items: List[Dict[str, Any]]
+    items: List[BarangMasukItem]
+
+class StaffingItem(BaseModel):
+    barang_id: str
+    qty: int = Field(ge=0)
+    # Optional passthrough metadata
+    nama_barang: Optional[str] = None
+    nama_pengrajin: Optional[str] = None
+    spesifikasi: Optional[str] = None
+    gambar_path: Optional[str] = None
+    harga_pengrajin: Optional[float] = None
+    harga_jual: Optional[float] = None
+    qty_diterima: Optional[int] = None
+    catatan: Optional[str] = None
 
 class StaffingCreate(BaseModel):
     po_id: str
     tanggal_keluar: str
-    items: List[Dict[str, Any]]
+    items: List[StaffingItem]
 
 class SPKCreate(BaseModel):
     no_spk: str
@@ -459,12 +485,26 @@ async def update_po(po_id: str, po: POCreate, user: dict = Depends(get_current_u
     if user["role"] not in ["admin"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     
+    # Fetch existing PO to preserve cumulative counters (qty_staffed, qty_diterima)
+    existing_po = await db.po.find_one({"_id": ObjectId(po_id)})
+    if not existing_po:
+        raise HTTPException(status_code=404, detail="PO not found")
+    
+    existing_counters = {
+        it.get("barang_id"): {
+            "qty_diterima": it.get("qty_diterima", 0) or 0,
+            "qty_staffed": it.get("qty_staffed", 0) or 0,
+        }
+        for it in existing_po.get("items", [])
+    }
+    
     items_with_details = []
     for item in po.items:
         barang = await db.barang.find_one({"_id": ObjectId(item.barang_id)}, {"_id": 0})
         if not barang:
             raise HTTPException(status_code=404, detail=f"Barang {item.barang_id} not found")
         
+        prev = existing_counters.get(item.barang_id, {"qty_diterima": 0, "qty_staffed": 0})
         items_with_details.append({
             "barang_id": item.barang_id,
             "nama_barang": barang["nama_barang"],
@@ -474,8 +514,8 @@ async def update_po(po_id: str, po: POCreate, user: dict = Depends(get_current_u
             "harga_pengrajin": barang["harga_pengrajin"],
             "harga_jual": barang["harga_jual"],
             "qty": item.qty,
-            "qty_diterima": 0,
-            "qty_staffed": 0,
+            "qty_diterima": prev["qty_diterima"],
+            "qty_staffed": prev["qty_staffed"],
             "catatan": item.catatan
         })
     
@@ -496,12 +536,33 @@ async def create_barang_masuk(bm: BarangMasukCreate, user: dict = Depends(get_cu
     if not po:
         raise HTTPException(status_code=404, detail="PO not found")
     
+    # Validate: qty_diterima cannot exceed remaining (qty_po - qty_diterima_current)
+    po_items_map = {it.get("barang_id"): it for it in po.get("items", [])}
+    items_dicts = []
+    for it in bm.items:
+        po_item = po_items_map.get(it.barang_id)
+        if not po_item:
+            raise HTTPException(status_code=400, detail=f"Barang {it.barang_id} tidak ada di PO ini")
+        sisa = (po_item.get("qty", 0) or 0) - (po_item.get("qty_diterima", 0) or 0)
+        if it.qty_diterima > sisa:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Qty diterima untuk {po_item.get('nama_barang','')} melebihi sisa PO (sisa: {sisa}, diminta: {it.qty_diterima})"
+            )
+        items_dicts.append({
+            **it.model_dump(exclude_none=True),
+            "nama_barang": po_item.get("nama_barang", ""),
+            "nama_pengrajin": po_item.get("nama_pengrajin", ""),
+            "spesifikasi": po_item.get("spesifikasi", ""),
+            "gambar_path": po_item.get("gambar_path"),
+        })
+    
     doc = {
         "po_id": bm.po_id,
         "no_po": po["no_po"],
         "tanggal_masuk": bm.tanggal_masuk,
         "penerima": bm.penerima,
-        "items": bm.items,
+        "items": items_dicts,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": user["_id"]
     }
@@ -509,7 +570,7 @@ async def create_barang_masuk(bm: BarangMasukCreate, user: dict = Depends(get_cu
     result = await db.barang_masuk.insert_one(doc)
     
     # Update qty_diterima in PO
-    for item in bm.items:
+    for item in items_dicts:
         await db.po.update_one(
             {"_id": ObjectId(bm.po_id), "items.barang_id": item["barang_id"]},
             {"$inc": {"items.$.qty_diterima": item["qty_diterima"]}}
@@ -547,11 +608,32 @@ async def create_staffing(staffing: StaffingCreate, user: dict = Depends(get_cur
     if not po:
         raise HTTPException(status_code=404, detail="PO not found")
     
+    # Validate: qty cannot exceed remaining (qty_po - qty_staffed_current)
+    po_items_map = {it.get("barang_id"): it for it in po.get("items", [])}
+    items_dicts = []
+    for it in staffing.items:
+        po_item = po_items_map.get(it.barang_id)
+        if not po_item:
+            raise HTTPException(status_code=400, detail=f"Barang {it.barang_id} tidak ada di PO ini")
+        sisa = (po_item.get("qty", 0) or 0) - (po_item.get("qty_staffed", 0) or 0)
+        if it.qty > sisa:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Qty staffing untuk {po_item.get('nama_barang','')} melebihi sisa PO (sisa: {sisa}, diminta: {it.qty})"
+            )
+        items_dicts.append({
+            **it.model_dump(exclude_none=True),
+            "nama_barang": po_item.get("nama_barang", ""),
+            "nama_pengrajin": po_item.get("nama_pengrajin", ""),
+            "spesifikasi": po_item.get("spesifikasi", ""),
+            "gambar_path": po_item.get("gambar_path"),
+        })
+    
     doc = {
         "po_id": staffing.po_id,
         "no_po": po["no_po"],
         "tanggal_keluar": staffing.tanggal_keluar,
-        "items": staffing.items,
+        "items": items_dicts,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": user["_id"]
     }
@@ -559,10 +641,10 @@ async def create_staffing(staffing: StaffingCreate, user: dict = Depends(get_cur
     result = await db.staffing.insert_one(doc)
     
     # Update qty_staffed in PO
-    for item in staffing.items:
+    for item in items_dicts:
         await db.po.update_one(
             {"_id": ObjectId(staffing.po_id), "items.barang_id": item["barang_id"]},
-            {"$inc": {"items.$.qty_staffed": item.get("qty", 0)}}
+            {"$inc": {"items.$.qty_staffed": item["qty"]}}
         )
     
     doc["_id"] = str(result.inserted_id)
@@ -1172,15 +1254,40 @@ async def delete_po(po_id: str, user: dict = Depends(get_current_user)):
 async def update_bm(bm_id: str, bm: BarangMasukCreate, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin", "staff"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    # Revert old qty from PO
+    # Revert old qty from PO first (so validation uses net current)
     old = await db.barang_masuk.find_one({"_id": ObjectId(bm_id)})
     if old:
         for item in old.get("items", []):
-            await db.po.update_one({"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]}, {"$inc": {"items.$.qty_diterima": -item.get("qty_diterima", 0)}})
+            await db.po.update_one({"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]}, {"$inc": {"items.$.qty_diterima": -(item.get("qty_diterima", 0) or 0)}})
+    
     po = await db.po.find_one({"_id": ObjectId(bm.po_id)})
-    doc = {"po_id": bm.po_id, "no_po": po["no_po"], "tanggal_masuk": bm.tanggal_masuk, "penerima": bm.penerima, "items": bm.items}
+    if not po:
+        raise HTTPException(status_code=404, detail="PO not found")
+    
+    # Validate against remaining
+    po_items_map = {it.get("barang_id"): it for it in po.get("items", [])}
+    items_dicts = []
+    for it in bm.items:
+        po_item = po_items_map.get(it.barang_id)
+        if not po_item:
+            raise HTTPException(status_code=400, detail=f"Barang {it.barang_id} tidak ada di PO ini")
+        sisa = (po_item.get("qty", 0) or 0) - (po_item.get("qty_diterima", 0) or 0)
+        if it.qty_diterima > sisa:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Qty diterima untuk {po_item.get('nama_barang','')} melebihi sisa PO (sisa: {sisa}, diminta: {it.qty_diterima})"
+            )
+        items_dicts.append({
+            **it.model_dump(exclude_none=True),
+            "nama_barang": po_item.get("nama_barang", ""),
+            "nama_pengrajin": po_item.get("nama_pengrajin", ""),
+            "spesifikasi": po_item.get("spesifikasi", ""),
+            "gambar_path": po_item.get("gambar_path"),
+        })
+    
+    doc = {"po_id": bm.po_id, "no_po": po["no_po"], "tanggal_masuk": bm.tanggal_masuk, "penerima": bm.penerima, "items": items_dicts}
     await db.barang_masuk.update_one({"_id": ObjectId(bm_id)}, {"$set": doc})
-    for item in bm.items:
+    for item in items_dicts:
         await db.po.update_one({"_id": ObjectId(bm.po_id), "items.barang_id": item["barang_id"]}, {"$inc": {"items.$.qty_diterima": item["qty_diterima"]}})
     return {"message": "Barang masuk updated"}
 
@@ -1205,25 +1312,49 @@ async def delete_bm(bm_id: str, user: dict = Depends(get_current_user)):
 async def update_staffing(st_id: str, staffing: StaffingCreate, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin", "staff"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    # Revert old qty_staffed
+    # Revert old qty_staffed first
     old = await db.staffing.find_one({"_id": ObjectId(st_id)})
     if old:
         for item in old.get("items", []):
             try:
                 await db.po.update_one(
                     {"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]},
-                    {"$inc": {"items.$.qty_staffed": -item.get("qty", 0)}}
+                    {"$inc": {"items.$.qty_staffed": -(item.get("qty", 0) or 0)}}
                 )
             except Exception:
                 pass
     po = await db.po.find_one({"_id": ObjectId(staffing.po_id)})
-    doc = {"po_id": staffing.po_id, "no_po": po["no_po"], "tanggal_keluar": staffing.tanggal_keluar, "items": staffing.items}
+    if not po:
+        raise HTTPException(status_code=404, detail="PO not found")
+    
+    # Validate against remaining
+    po_items_map = {it.get("barang_id"): it for it in po.get("items", [])}
+    items_dicts = []
+    for it in staffing.items:
+        po_item = po_items_map.get(it.barang_id)
+        if not po_item:
+            raise HTTPException(status_code=400, detail=f"Barang {it.barang_id} tidak ada di PO ini")
+        sisa = (po_item.get("qty", 0) or 0) - (po_item.get("qty_staffed", 0) or 0)
+        if it.qty > sisa:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Qty staffing untuk {po_item.get('nama_barang','')} melebihi sisa PO (sisa: {sisa}, diminta: {it.qty})"
+            )
+        items_dicts.append({
+            **it.model_dump(exclude_none=True),
+            "nama_barang": po_item.get("nama_barang", ""),
+            "nama_pengrajin": po_item.get("nama_pengrajin", ""),
+            "spesifikasi": po_item.get("spesifikasi", ""),
+            "gambar_path": po_item.get("gambar_path"),
+        })
+    
+    doc = {"po_id": staffing.po_id, "no_po": po["no_po"], "tanggal_keluar": staffing.tanggal_keluar, "items": items_dicts}
     await db.staffing.update_one({"_id": ObjectId(st_id)}, {"$set": doc})
     # Apply new qty_staffed
-    for item in staffing.items:
+    for item in items_dicts:
         await db.po.update_one(
             {"_id": ObjectId(staffing.po_id), "items.barang_id": item["barang_id"]},
-            {"$inc": {"items.$.qty_staffed": item.get("qty", 0)}}
+            {"$inc": {"items.$.qty_staffed": item["qty"]}}
         )
     return {"message": "Staffing updated"}
 
