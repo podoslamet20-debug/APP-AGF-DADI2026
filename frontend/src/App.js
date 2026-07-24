@@ -12,6 +12,7 @@ import SPKPage from "@/pages/SPKPage";
 import ProgresBarang from "@/pages/ProgresBarang";
 import RekapData from "@/pages/RekapData";
 import Dashboard from "@/pages/Dashboard";
+import UserManagement from "@/pages/UserManagement";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -37,6 +38,7 @@ function App() {
               <Route path="spk" element={<SPKPage />} />
               <Route path="progres" element={<ProgresBarang />} />
               <Route path="rekap" element={<RekapData />} />
+              <Route path="users" element={<UserManagement />} />
             </Route>
           </Routes>
         </BrowserRouter>

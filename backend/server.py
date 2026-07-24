@@ -668,7 +668,7 @@ async def get_rekap_all_po(user: dict = Depends(get_current_user)):
     for p in pos: p["_id"] = str(p["_id"])
     for s in staffing: s["_id"] = str(s["_id"])
     
-    # Calculate remaining items (PO - Staffing)
+    # Calculate remaining items (PO - Staffing) - "Kurang Kirim"
     result = []
     for po in pos:
         for item in po.get("items", []):
@@ -676,14 +676,15 @@ async def get_rekap_all_po(user: dict = Depends(get_current_user)):
                 si["qty"] for s in staffing if s.get("po_id") == po["_id"]
                 for si in s.get("items", []) if si.get("barang_id") == item.get("barang_id")
             )
-            remaining = item["qty"] - staffing_qty
+            kurang_kirim = item["qty"] - staffing_qty
             result.append({
                 "no_po": po["no_po"],
                 "nama_barang": item["nama_barang"],
+                "spesifikasi": item.get("spesifikasi", ""),
                 "nama_pengrajin": item.get("nama_pengrajin", ""),
                 "qty_po": item["qty"],
                 "qty_staffing": staffing_qty,
-                "remaining": remaining,
+                "kurang_kirim": kurang_kirim,
                 "gambar_path": item.get("gambar_path")
             })
     
@@ -720,88 +721,218 @@ async def get_rekap_per_pengrajin(user: dict = Depends(get_current_user)):
     return [{"pengrajin": k, **v, "remaining": v["spk_qty"] - v["masuk_qty"]} for k, v in result.items()]
 
 # ===== Export Routes =====
+def _fetch_image_flowable(gambar_path: Optional[str], max_width_mm: float = 30) -> Optional[RLImage]:
+    """Fetch image from storage and return ReportLab Image flowable, or None."""
+    if not gambar_path:
+        return None
+    try:
+        data, _ = get_object(gambar_path)
+        pil = PILImage.open(BytesIO(data))
+        ratio = pil.height / pil.width if pil.width else 1
+        img = RLImage(BytesIO(data), width=max_width_mm*mm, height=max_width_mm*ratio*mm)
+        return img
+    except Exception as e:
+        logger.warning(f"Could not fetch image {gambar_path}: {e}")
+        return None
+
+
+def _brand_header(story, title: str, subtitle: str, styles):
+    header_style = ParagraphStyle('brand', parent=styles["Title"], fontSize=20, textColor=colors.HexColor("#8B5A2B"), spaceAfter=4, alignment=0)
+    story.append(Paragraph("AGFDATA", header_style))
+    story.append(Paragraph("<font color='#5C5C5C' size='9'>Furniture Data Management System</font>", styles["Normal"]))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(f"<b>{title}</b>", ParagraphStyle('h1', parent=styles["Heading1"], fontSize=16, textColor=colors.HexColor("#1A1A1A"))))
+    if subtitle:
+        story.append(Paragraph(f"<font color='#5C5C5C'>{subtitle}</font>", styles["Normal"]))
+    story.append(Spacer(1, 8))
+
+
 @api_router.get("/export/po/{po_id}/pdf")
 async def export_po_pdf(po_id: str, user: dict = Depends(get_current_user)):
     po = await db.po.find_one({"_id": ObjectId(po_id)})
     if not po:
         raise HTTPException(status_code=404, detail="PO not found")
-    
+
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm)
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
     story = []
     styles = getSampleStyleSheet()
-    
-    story.append(Paragraph(f"<b>Purchase Order</b>", styles["Title"]))
-    story.append(Paragraph(f"No PO: {po['no_po']}", styles["Normal"]))
-    story.append(Spacer(1, 12))
-    
-    data = [["Nama Barang", "Spesifikasi", "Qty", "Pengrajin"]]
+
+    _brand_header(story, "PURCHASE ORDER", f"No PO: {po['no_po']}  •  Tanggal: {po.get('created_at', '')[:10]}", styles)
+
+    body_style = ParagraphStyle('body', parent=styles["BodyText"], fontSize=9, leading=11)
+    header = ["Foto", "Nama Barang", "Spesifikasi", "Pengrajin", "Qty", "Diterima", "Kurang Kirim"]
+    data = [header]
     for item in po.get("items", []):
+        img = _fetch_image_flowable(item.get("gambar_path"), 20) or Paragraph("-", body_style)
+        kurang = item["qty"] - (item.get("qty_diterima", 0))
         data.append([
-            item["nama_barang"],
-            item["spesifikasi"],
-            str(item["qty"]),
-            item.get("nama_pengrajin", "")
+            img,
+            Paragraph(item.get("nama_barang", ""), body_style),
+            Paragraph(item.get("spesifikasi", ""), body_style),
+            Paragraph(item.get("nama_pengrajin", ""), body_style),
+            str(item.get("qty", 0)),
+            str(item.get("qty_diterima", 0)),
+            str(kurang)
         ])
-    
-    table = Table(data)
+
+    table = Table(data, repeatRows=1, colWidths=[22*mm, 40*mm, 45*mm, 30*mm, 15*mm, 18*mm, 22*mm])
     table.setStyle(TableStyle([
-        ("GRID", (0,0), (-1,-1), 0.5, colors.black),
-        ("BACKGROUND", (0,0), (-1,0), colors.grey),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.whitesmoke),
+        ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E5E5E5")),
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#8B5A2B")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0), (-1,-1), 9),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#FAFAFA")]),
+        ("ALIGN", (4,1), (6,-1), "CENTER"),
     ]))
     story.append(table)
-    
+    story.append(Spacer(1, 12))
+    if po.get("catatan"):
+        story.append(Paragraph(f"<b>Catatan:</b> {po['catatan']}", styles["Normal"]))
+
     doc.build(story)
     buffer.seek(0)
-    
     return StreamingResponse(buffer, media_type="application/pdf", headers={
-        "Content-Disposition": f"attachment; filename=po-{po['no_po']}.pdf"
+        "Content-Disposition": f"attachment; filename=PO-{po['no_po']}.pdf"
     })
+
 
 @api_router.get("/export/spk/{spk_id}/pdf")
 async def export_spk_pdf(spk_id: str, user: dict = Depends(get_current_user)):
     spk = await db.spk.find_one({"_id": ObjectId(spk_id)})
     if not spk:
         raise HTTPException(status_code=404, detail="SPK not found")
-    
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
+    story = []
+    styles = getSampleStyleSheet()
+
+    _brand_header(story, "SURAT PERINTAH KERJA (SPK)", f"No SPK: {spk['no_spk']}  •  Deadline: {spk.get('deadline', '')}", styles)
+
+    body_style = ParagraphStyle('body', parent=styles["BodyText"], fontSize=9, leading=11)
+    header = ["Foto", "Nama Barang", "Spesifikasi", "No PO", "Pengrajin", "Qty", "Harga"]
+    data = [header]
+    total = 0
+    for item in spk.get("items", []):
+        img = _fetch_image_flowable(item.get("gambar_path"), 20) or Paragraph("-", body_style)
+        harga = item.get("harga", 0) or 0
+        qty = item.get("qty", 0) or 0
+        total += harga * qty
+        data.append([
+            img,
+            Paragraph(item.get("nama_barang", ""), body_style),
+            Paragraph(item.get("spesifikasi", ""), body_style),
+            item.get("no_po", ""),
+            Paragraph(item.get("nama_pengrajin", ""), body_style),
+            str(qty),
+            f"Rp {harga:,.0f}"
+        ])
+
+    table = Table(data, repeatRows=1, colWidths=[22*mm, 36*mm, 40*mm, 22*mm, 28*mm, 12*mm, 26*mm])
+    table.setStyle(TableStyle([
+        ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E5E5E5")),
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#8B5A2B")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0), (-1,-1), 9),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#FAFAFA")]),
+        ("ALIGN", (5,1), (6,-1), "RIGHT"),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(f"<b>Total: Rp {total:,.0f}</b>", styles["Normal"]))
+    story.append(Spacer(1, 12))
+    if spk.get("catatan_pembayaran"):
+        story.append(Paragraph(f"<b>Catatan Pembayaran:</b><br/>{spk['catatan_pembayaran']}", styles["Normal"]))
+    story.append(Spacer(1, 30))
+
+    # Signature area
+    pengrajin_names = ", ".join(set([i.get("nama_pengrajin", "") for i in spk.get("items", []) if i.get("nama_pengrajin")]))
+    sig_data = [
+        [Paragraph("<b>Owner Perusahaan</b>", styles["Normal"]), Paragraph("<b>Pengrajin</b>", styles["Normal"])],
+        ["", ""],
+        ["", ""],
+        [Paragraph(f"({spk.get('owner_perusahaan', '')})", styles["Normal"]), Paragraph(f"({pengrajin_names})", styles["Normal"])],
+    ]
+    sig_table = Table(sig_data, colWidths=[90*mm, 90*mm])
+    sig_table.setStyle(TableStyle([
+        ("ALIGN", (0,0), (-1,-1), "CENTER"),
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
+        ("LINEBELOW", (0,2), (0,2), 0.5, colors.black),
+        ("LINEBELOW", (1,2), (1,2), 0.5, colors.black),
+    ]))
+    story.append(sig_table)
+
+    doc.build(story)
+    buffer.seek(0)
+    return StreamingResponse(buffer, media_type="application/pdf", headers={
+        "Content-Disposition": f"attachment; filename=SPK-{spk['no_spk']}.pdf"
+    })
+
+
+@api_router.get("/export/barang-masuk/{bm_id}/pdf")
+async def export_bm_pdf(bm_id: str, user: dict = Depends(get_current_user)):
+    bm = await db.barang_masuk.find_one({"_id": ObjectId(bm_id)})
+    if not bm:
+        raise HTTPException(status_code=404, detail="Not found")
+
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm)
     story = []
     styles = getSampleStyleSheet()
-    
-    story.append(Paragraph(f"<b>Surat Perintah Kerja (SPK)</b>", styles["Title"]))
-    story.append(Paragraph(f"No SPK: {spk['no_spk']}", styles["Normal"]))
-    story.append(Paragraph(f"Deadline: {spk['deadline']}", styles["Normal"]))
-    story.append(Spacer(1, 12))
-    
-    data = [["Nama Barang", "Spesifikasi", "Qty", "Pengrajin"]]
-    for item in spk.get("items", []):
-        data.append([
-            item["nama_barang"],
-            item["spesifikasi"],
-            str(item["qty"]),
-            item.get("nama_pengrajin", "")
-        ])
-    
-    table = Table(data)
+    _brand_header(story, "BARANG MASUK", f"No PO: {bm['no_po']}  •  Tanggal: {bm['tanggal_masuk']}  •  Penerima: {bm['penerima']}", styles)
+    body_style = ParagraphStyle('body', parent=styles["BodyText"], fontSize=9, leading=11)
+    data = [["Foto", "Nama Barang", "Spesifikasi", "Pengrajin", "Qty Diterima"]]
+    for item in bm.get("items", []):
+        img = _fetch_image_flowable(item.get("gambar_path"), 20) or Paragraph("-", body_style)
+        data.append([img, Paragraph(item.get("nama_barang", ""), body_style), Paragraph(item.get("spesifikasi", ""), body_style), Paragraph(item.get("nama_pengrajin", ""), body_style), str(item.get("qty_diterima", 0))])
+    table = Table(data, repeatRows=1, colWidths=[22*mm, 45*mm, 55*mm, 35*mm, 25*mm])
     table.setStyle(TableStyle([
-        ("GRID", (0,0), (-1,-1), 0.5, colors.black),
-        ("BACKGROUND", (0,0), (-1,0), colors.grey),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.whitesmoke),
+        ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E5E5E5")),
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#8B5A2B")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
     ]))
     story.append(table)
-    story.append(Spacer(1, 12))
-    story.append(Paragraph(f"Catatan Pembayaran: {spk.get('catatan_pembayaran', '')}", styles["Normal"]))
-    story.append(Spacer(1, 20))
-    story.append(Paragraph(f"Owner: {spk.get('owner_perusahaan', '')}", styles["Normal"]))
-    
     doc.build(story)
     buffer.seek(0)
-    
-    return StreamingResponse(buffer, media_type="application/pdf", headers={
-        "Content-Disposition": f"attachment; filename=spk-{spk['no_spk']}.pdf"
-    })
+    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=BM-{bm['no_po']}.pdf"})
+
+
+@api_router.get("/export/staffing/{st_id}/pdf")
+async def export_staffing_pdf(st_id: str, user: dict = Depends(get_current_user)):
+    st = await db.staffing.find_one({"_id": ObjectId(st_id)})
+    if not st:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm)
+    story = []
+    styles = getSampleStyleSheet()
+    _brand_header(story, "STAFFING (BARANG KELUAR)", f"No PO: {st['no_po']}  •  Tanggal Keluar: {st['tanggal_keluar']}", styles)
+    body_style = ParagraphStyle('body', parent=styles["BodyText"], fontSize=9, leading=11)
+    data = [["Foto", "Nama Barang", "Spesifikasi", "Pengrajin", "Qty Keluar"]]
+    for item in st.get("items", []):
+        img = _fetch_image_flowable(item.get("gambar_path"), 20) or Paragraph("-", body_style)
+        data.append([img, Paragraph(item.get("nama_barang", ""), body_style), Paragraph(item.get("spesifikasi", ""), body_style), Paragraph(item.get("nama_pengrajin", ""), body_style), str(item.get("qty", 0))])
+    table = Table(data, repeatRows=1, colWidths=[22*mm, 45*mm, 55*mm, 35*mm, 25*mm])
+    table.setStyle(TableStyle([
+        ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E5E5E5")),
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#8B5A2B")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+    ]))
+    story.append(table)
+    doc.build(story)
+    buffer.seek(0)
+    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=Staffing-{st['no_po']}.pdf"})
+
 
 @api_router.get("/export/barang-masuk/excel")
 async def export_barang_masuk_excel(user: dict = Depends(get_current_user)):
@@ -829,6 +960,265 @@ async def export_barang_masuk_excel(user: dict = Depends(get_current_user)):
     return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={
         "Content-Disposition": "attachment; filename=barang-masuk.xlsx"
     })
+
+
+# ===== Edit / Delete Endpoints =====
+@api_router.put("/barang/{barang_id}")
+async def update_barang(barang_id: str, barang: BarangCreate, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.barang.update_one({"_id": ObjectId(barang_id)}, {"$set": barang.model_dump()})
+    return {"message": "Barang updated"}
+
+
+@api_router.delete("/barang/{barang_id}")
+async def delete_barang(barang_id: str, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.barang.delete_one({"_id": ObjectId(barang_id)})
+    return {"message": "Barang deleted"}
+
+
+@api_router.delete("/po/{po_id}")
+async def delete_po(po_id: str, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.po.delete_one({"_id": ObjectId(po_id)})
+    return {"message": "PO deleted"}
+
+
+@api_router.put("/barang-masuk/{bm_id}")
+async def update_bm(bm_id: str, bm: BarangMasukCreate, user: dict = Depends(get_current_user)):
+    if user["role"] not in ["admin", "staff"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    # Revert old qty from PO
+    old = await db.barang_masuk.find_one({"_id": ObjectId(bm_id)})
+    if old:
+        for item in old.get("items", []):
+            await db.po.update_one({"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]}, {"$inc": {"items.$.qty_diterima": -item.get("qty_diterima", 0)}})
+    po = await db.po.find_one({"_id": ObjectId(bm.po_id)})
+    doc = {"po_id": bm.po_id, "no_po": po["no_po"], "tanggal_masuk": bm.tanggal_masuk, "penerima": bm.penerima, "items": bm.items}
+    await db.barang_masuk.update_one({"_id": ObjectId(bm_id)}, {"$set": doc})
+    for item in bm.items:
+        await db.po.update_one({"_id": ObjectId(bm.po_id), "items.barang_id": item["barang_id"]}, {"$inc": {"items.$.qty_diterima": item["qty_diterima"]}})
+    return {"message": "Barang masuk updated"}
+
+
+@api_router.delete("/barang-masuk/{bm_id}")
+async def delete_bm(bm_id: str, user: dict = Depends(get_current_user)):
+    if user["role"] not in ["admin", "staff"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    old = await db.barang_masuk.find_one({"_id": ObjectId(bm_id)})
+    if old:
+        for item in old.get("items", []):
+            await db.po.update_one({"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]}, {"$inc": {"items.$.qty_diterima": -item.get("qty_diterima", 0)}})
+    await db.barang_masuk.delete_one({"_id": ObjectId(bm_id)})
+    return {"message": "Barang masuk deleted"}
+
+
+@api_router.put("/staffing/{st_id}")
+async def update_staffing(st_id: str, staffing: StaffingCreate, user: dict = Depends(get_current_user)):
+    if user["role"] not in ["admin", "staff"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    po = await db.po.find_one({"_id": ObjectId(staffing.po_id)})
+    doc = {"po_id": staffing.po_id, "no_po": po["no_po"], "tanggal_keluar": staffing.tanggal_keluar, "items": staffing.items}
+    await db.staffing.update_one({"_id": ObjectId(st_id)}, {"$set": doc})
+    return {"message": "Staffing updated"}
+
+
+@api_router.delete("/staffing/{st_id}")
+async def delete_staffing(st_id: str, user: dict = Depends(get_current_user)):
+    if user["role"] not in ["admin", "staff"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.staffing.delete_one({"_id": ObjectId(st_id)})
+    return {"message": "Staffing deleted"}
+
+
+@api_router.delete("/spk/{spk_id}")
+async def delete_spk(spk_id: str, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.spk.delete_one({"_id": ObjectId(spk_id)})
+    return {"message": "SPK deleted"}
+
+
+# ===== User Management Endpoints =====
+class UserCreate(BaseModel):
+    email: str
+    password: str
+    name: str
+    role: str  # admin/staff/guest
+
+
+class UserUpdate(BaseModel):
+    email: Optional[str] = None
+    password: Optional[str] = None
+    name: Optional[str] = None
+    role: Optional[str] = None
+
+
+@api_router.get("/users")
+async def list_users(user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    users = await db.users.find({}, {"password_hash": 0}).to_list(1000)
+    for u in users:
+        u["_id"] = str(u["_id"])
+    return users
+
+
+@api_router.post("/users")
+async def create_user(new_user: UserCreate, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if new_user.role not in ["admin", "staff", "guest"]:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    existing = await db.users.find_one({"email": new_user.email.lower()})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already exists")
+    doc = {
+        "email": new_user.email.lower(),
+        "password_hash": hash_password(new_user.password),
+        "name": new_user.name,
+        "role": new_user.role,
+        "created_at": datetime.now(timezone.utc)
+    }
+    result = await db.users.insert_one(doc)
+    return {"_id": str(result.inserted_id), "email": doc["email"], "name": doc["name"], "role": doc["role"]}
+
+
+@api_router.put("/users/{user_id}")
+async def update_user(user_id: str, upd: UserUpdate, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    updates = {}
+    if upd.email: updates["email"] = upd.email.lower()
+    if upd.name: updates["name"] = upd.name
+    if upd.role:
+        if upd.role not in ["admin", "staff", "guest"]:
+            raise HTTPException(status_code=400, detail="Invalid role")
+        updates["role"] = upd.role
+    if upd.password:
+        updates["password_hash"] = hash_password(upd.password)
+    if updates:
+        await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": updates})
+    return {"message": "User updated"}
+
+
+@api_router.delete("/users/{user_id}")
+async def delete_user(user_id: str, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if user_id == user["_id"]:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    await db.users.delete_one({"_id": ObjectId(user_id)})
+    return {"message": "User deleted"}
+
+
+# ===== Additional Rekap Endpoints =====
+@api_router.get("/rekap/per-barang")
+async def get_rekap_per_barang(user: dict = Depends(get_current_user)):
+    """Rekap per barang: barang masuk - progres barang (packing) per barang."""
+    barang_masuk = await db.barang_masuk.find({}).to_list(1000)
+    progres = await db.progres.find({}).to_list(1000)
+
+    # Aggregate barang masuk by barang_id
+    agg = {}
+    for bm in barang_masuk:
+        for item in bm.get("items", []):
+            bid = item.get("barang_id")
+            if not bid:
+                continue
+            if bid not in agg:
+                agg[bid] = {
+                    "barang_id": bid,
+                    "nama_barang": item.get("nama_barang", ""),
+                    "nama_pengrajin": item.get("nama_pengrajin", ""),
+                    "gambar_path": item.get("gambar_path"),
+                    "qty_masuk": 0,
+                    "qty_packing": 0,
+                }
+            agg[bid]["qty_masuk"] += item.get("qty_diterima", 0)
+
+    for p in progres:
+        bid = p.get("item_id")
+        if bid in agg:
+            agg[bid]["qty_packing"] += p.get("packing", 0) or 0
+
+    result = []
+    for v in agg.values():
+        v["kurang"] = v["qty_masuk"] - v["qty_packing"]
+        result.append(v)
+    if user["role"] == "guest":
+        for r in result:
+            r.pop("nama_pengrajin", None)
+    return result
+
+
+@api_router.get("/rekap/progres")
+async def get_rekap_progres(user: dict = Depends(get_current_user)):
+    """Rekap progres: gabungan barang masuk dengan status progres."""
+    barang_masuk = await db.barang_masuk.find({}).to_list(1000)
+    progres = await db.progres.find({}).to_list(1000)
+
+    # Progres map by (bm_id, item_id) - but progres already stored per barang_masuk_id
+    prog_map = {}
+    for p in progres:
+        prog_map[f"{p['barang_masuk_id']}_{p['item_id']}"] = p
+
+    result = []
+    for bm in barang_masuk:
+        bm_id = str(bm["_id"])
+        for item in bm.get("items", []):
+            key = f"{bm_id}_{item.get('barang_id')}"
+            pr = prog_map.get(key, {"grinda": 0, "servis": 0, "finishing": 0, "packing": 0})
+            qty = item.get("qty_diterima", 0)
+            packing = pr.get("packing", 0) or 0
+            result.append({
+                "no_po": bm.get("no_po", ""),
+                "nama_barang": item.get("nama_barang", ""),
+                "nama_pengrajin": item.get("nama_pengrajin", ""),
+                "gambar_path": item.get("gambar_path"),
+                "qty_masuk": qty,
+                "grinda": pr.get("grinda", 0) or 0,
+                "servis": pr.get("servis", 0) or 0,
+                "finishing": pr.get("finishing", 0) or 0,
+                "packing": packing,
+                "komplit": packing >= qty and qty > 0,
+            })
+    if user["role"] == "guest":
+        for r in result:
+            r.pop("nama_pengrajin", None)
+    return result
+
+
+@api_router.get("/rekap/staffing-detail")
+async def get_rekap_staffing_detail(tanggal_from: Optional[str] = None, tanggal_to: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """Rekap staffing: data staffing per barang berdasarkan tanggal range."""
+    query = {}
+    if tanggal_from and tanggal_to:
+        query["tanggal_keluar"] = {"$gte": tanggal_from, "$lte": tanggal_to}
+    elif tanggal_from:
+        query["tanggal_keluar"] = {"$gte": tanggal_from}
+    elif tanggal_to:
+        query["tanggal_keluar"] = {"$lte": tanggal_to}
+    staffing = await db.staffing.find(query).to_list(1000)
+    result = []
+    for st in staffing:
+        for item in st.get("items", []):
+            result.append({
+                "no_po": st.get("no_po", ""),
+                "tanggal_keluar": st.get("tanggal_keluar", ""),
+                "nama_barang": item.get("nama_barang", ""),
+                "nama_pengrajin": item.get("nama_pengrajin", ""),
+                "gambar_path": item.get("gambar_path"),
+                "qty": item.get("qty", 0),
+            })
+    if user["role"] == "guest":
+        for r in result:
+            r.pop("nama_pengrajin", None)
+    return result
+
 
 # Include router
 app.include_router(api_router)

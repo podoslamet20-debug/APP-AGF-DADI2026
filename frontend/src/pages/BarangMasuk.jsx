@@ -7,26 +7,34 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, PackageOpen, Download, Package } from "lucide-react";
+import { Plus, PackageOpen, Download, Package, Search, Trash2, Edit, Eye } from "lucide-react";
 
 export default function BarangMasuk() {
   const { API, canEditPartial, canSeeCraftsman } = useAuth();
   const [items, setItems] = useState([]);
   const [pos, setPos] = useState([]);
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [search, setSearch] = useState("");
   const [selectedPO, setSelectedPO] = useState(null);
   const [form, setForm] = useState({ po_id: "", tanggal_masuk: "", penerima: "", items: [] });
 
   const load = async () => {
     try {
       const [bmRes, poRes] = await Promise.all([axios.get(`${API}/barang-masuk`), axios.get(`${API}/po`)]);
-      setItems(bmRes.data);
+      let bmData = bmRes.data;
+      if (search) {
+        bmData = bmData.filter(bm => bm.no_po?.toLowerCase().includes(search.toLowerCase()) || bm.penerima?.toLowerCase().includes(search.toLowerCase()));
+      }
+      setItems(bmData);
       setPos(poRes.data);
     } catch (e) { console.error(e); }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [search]);
 
   const selectPO = async (poId) => {
     const po = pos.find(p => (p._id || p.id) === poId);
@@ -51,9 +59,15 @@ export default function BarangMasuk() {
       return;
     }
     try {
-      await axios.post(`${API}/barang-masuk`, form);
-      toast.success("Barang masuk berhasil dicatat");
+      if (editingId) {
+        await axios.put(`${API}/barang-masuk/${editingId}`, form);
+        toast.success("Barang masuk berhasil diupdate");
+      } else {
+        await axios.post(`${API}/barang-masuk`, form);
+        toast.success("Barang masuk berhasil dicatat");
+      }
       setOpen(false);
+      setEditingId(null);
       setForm({ po_id: "", tanggal_masuk: "", penerima: "", items: [] });
       setSelectedPO(null);
       load();
@@ -61,6 +75,23 @@ export default function BarangMasuk() {
       toast.error("Gagal: " + (e.response?.data?.detail || ""));
     }
   };
+
+  const startEdit = (bm) => {
+    setForm({ po_id: bm.po_id, tanggal_masuk: bm.tanggal_masuk, penerima: bm.penerima, items: bm.items });
+    setEditingId(bm._id);
+    setSelectedPO({ items: bm.items });
+    setOpen(true);
+  };
+
+  const deleteBm = async (id) => {
+    try {
+      await axios.delete(`${API}/barang-masuk/${id}`);
+      toast.success("Barang masuk dihapus");
+      load();
+    } catch (e) { toast.error("Gagal hapus"); }
+  };
+
+  const downloadPDF = (id) => window.open(`${API}/export/barang-masuk/${id}/pdf`, '_blank');
 
   const downloadExcel = () => {
     window.open(`${API}/export/barang-masuk/excel`, '_blank');
@@ -76,12 +107,12 @@ export default function BarangMasuk() {
         <div className="flex gap-2">
           <Button variant="outline" onClick={downloadExcel} data-testid="export-excel-bm"><Download className="w-4 h-4 mr-2" /> Export Excel</Button>
           {canEditPartial && (
-            <Dialog open={open} onOpenChange={setOpen}>
+            <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditingId(null); setForm({ po_id: "", tanggal_masuk: "", penerima: "", items: [] }); setSelectedPO(null); }}}>
               <DialogTrigger asChild>
                 <Button className="bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="add-bm-button"><Plus className="w-4 h-4 mr-2" /> Catat Masuk</Button>
               </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                <DialogHeader><DialogTitle>Catat Barang Masuk</DialogTitle></DialogHeader>
+                <DialogHeader><DialogTitle>{editingId ? "Edit Barang Masuk" : "Catat Barang Masuk"}</DialogTitle></DialogHeader>
                 <div className="space-y-4">
                   <div>
                     <Label>Pilih PO</Label>
@@ -131,6 +162,13 @@ export default function BarangMasuk() {
         </div>
       </div>
 
+      <Card className="p-4 border border-[#E5E5E5]">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#5C5C5C]" />
+          <Input placeholder="Cari No PO atau Penerima..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" data-testid="search-bm-input" />
+        </div>
+      </Card>
+
       <div className="space-y-4" data-testid="bm-list">
         {items.length === 0 ? (
           <Card className="p-12 text-center border border-dashed border-[#E5E5E5]">
@@ -144,6 +182,28 @@ export default function BarangMasuk() {
                 <div>
                   <h3 className="text-lg font-bold text-[#1A1A1A]">{bm.no_po}</h3>
                   <p className="text-sm text-[#5C5C5C]">Tanggal: {bm.tanggal_masuk} • Penerima: {bm.penerima}</p>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <Button variant="outline" size="sm" onClick={() => setPreview(bm)} data-testid={`preview-bm-${idx}`}><Eye className="w-3 h-3 mr-1" /> Preview</Button>
+                  {canEditPartial && <Button variant="outline" size="sm" onClick={() => startEdit(bm)} data-testid={`edit-bm-${idx}`}><Edit className="w-3 h-3 mr-1" /> Edit</Button>}
+                  {canEditPartial && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="outline" size="sm" className="text-[#F44336]" data-testid={`delete-bm-${idx}`}><Trash2 className="w-3 h-3" /></Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Hapus Barang Masuk?</AlertDialogTitle>
+                          <AlertDialogDescription>Data ini akan dihapus dan qty diterima di PO akan dikurangi.</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Batal</AlertDialogCancel>
+                          <AlertDialogAction className="bg-[#F44336]" onClick={() => deleteBm(bm._id)}>Hapus</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                  <Button variant="outline" size="sm" onClick={() => downloadPDF(bm._id)} data-testid={`pdf-bm-${idx}`}><Download className="w-3 h-3 mr-1" /> PDF</Button>
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -162,6 +222,29 @@ export default function BarangMasuk() {
           ))
         )}
       </div>
+
+      <Dialog open={!!preview} onOpenChange={() => setPreview(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Detail Barang Masuk</DialogTitle></DialogHeader>
+          {preview && (
+            <div className="space-y-3">
+              <p><strong>No PO:</strong> {preview.no_po}</p>
+              <p><strong>Tanggal Masuk:</strong> {preview.tanggal_masuk}</p>
+              <p><strong>Penerima:</strong> {preview.penerima}</p>
+              {preview.items?.map((item, i) => (
+                <div key={i} className="flex gap-3 p-3 border border-[#E5E5E5] rounded-md">
+                  {item.gambar_path && <img src={`${API}/files/${item.gambar_path}`} className="w-20 h-20 object-cover rounded" alt="" />}
+                  <div className="flex-1">
+                    <p className="font-bold">{item.nama_barang}</p>
+                    {canSeeCraftsman && <p className="text-sm text-[#5C5C5C]">{item.nama_pengrajin}</p>}
+                    <p className="text-sm">Qty Diterima: <strong>{item.qty_diterima}</strong></p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

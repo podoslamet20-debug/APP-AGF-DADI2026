@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { Plus, Search, Trash2, FileText, Download, Edit, Package } from "lucide-react";
 
@@ -85,11 +86,18 @@ export default function POPage() {
 
   const downloadPDF = async (po) => {
     try {
-      // Get the ID from the raw data
       const pos_full = await axios.get(`${API}/po?search=${po.no_po}`);
       const url = `${API}/export/po/${po._id || pos_full.data[0]._id}/pdf`;
       window.open(url, '_blank');
     } catch (e) { toast.error("Gagal download"); }
+  };
+
+  const deletePo = async (id) => {
+    try {
+      await axios.delete(`${API}/po/${id}`);
+      toast.success("PO dihapus");
+      load();
+    } catch (e) { toast.error("Gagal hapus"); }
   };
 
   return (
@@ -147,7 +155,7 @@ export default function POPage() {
                       </div>
                     ))}
                     {form.items.length === 0 && (
-                      <p className="text-sm text-[#5C5C5C] text-center py-4">Belum ada barang. Klik "Tambah" untuk menambahkan.</p>
+                      <p className="text-sm text-[#5C5C5C] text-center py-4">Belum ada barang. Klik &quot;Tambah&quot; untuk menambahkan.</p>
                     )}
                   </div>
                 </div>
@@ -189,6 +197,21 @@ export default function POPage() {
                   {canEdit && (
                     <>
                       <Button variant="outline" size="sm" onClick={() => startEdit(po._id, po.no_po)} data-testid={`edit-po-${idx}`}><Edit className="w-3 h-3 mr-1" /> Edit</Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button variant="outline" size="sm" className="text-[#F44336]" data-testid={`delete-po-${idx}`}><Trash2 className="w-3 h-3" /></Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Hapus PO {po.no_po}?</AlertDialogTitle>
+                            <AlertDialogDescription>PO ini akan dihapus permanen.</AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Batal</AlertDialogCancel>
+                            <AlertDialogAction className="bg-[#F44336]" onClick={() => deletePo(po._id)}>Hapus</AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </>
                   )}
                   <Button variant="outline" size="sm" onClick={() => downloadPDF(po)} data-testid={`pdf-po-${idx}`}><Download className="w-3 h-3 mr-1" /> PDF</Button>

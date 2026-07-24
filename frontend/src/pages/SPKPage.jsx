@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { Plus, Search, Trash2, FileText, Download, Package, Edit } from "lucide-react";
 
@@ -15,9 +16,11 @@ export default function SPKPage() {
   const { API, canEdit, canSeePrice, canSeeCraftsman } = useAuth();
   const [spks, setSpks] = useState([]);
   const [barangList, setBarangList] = useState([]);
+  const [poList, setPoList] = useState([]);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [detail, setDetail] = useState(null);
   const [form, setForm] = useState({
     no_spk: "",
     items: [],
@@ -28,16 +31,35 @@ export default function SPKPage() {
 
   const load = async () => {
     try {
-      const [spkRes, brRes] = await Promise.all([
+      const [spkRes, brRes, poRes] = await Promise.all([
         axios.get(`${API}/spk${search ? `?search=${search}` : ""}`),
         axios.get(`${API}/barang`),
+        axios.get(`${API}/po`),
       ]);
       setSpks(spkRes.data);
       setBarangList(brRes.data);
+      setPoList(poRes.data);
     } catch (e) { console.error(e); }
   };
 
   useEffect(() => { load(); }, [search]);
+
+  const importFromPO = (poId) => {
+    const po = poList.find(p => (p._id || p.id) === poId);
+    if (!po) return;
+    const newItems = po.items.map(i => ({
+      barang_id: i.barang_id,
+      nama_barang: i.nama_barang,
+      spesifikasi: i.spesifikasi,
+      qty: i.qty,
+      no_po: po.no_po,
+      nama_pengrajin: i.nama_pengrajin,
+      harga: i.harga_pengrajin || 0,
+      gambar_path: i.gambar_path,
+    }));
+    setForm({ ...form, items: [...form.items, ...newItems] });
+    toast.success(`${newItems.length} item ditambahkan dari PO ${po.no_po}`);
+  };
 
   const addItem = () => {
     setForm({ ...form, items: [...form.items, { barang_id: "", nama_barang: "", spesifikasi: "", qty: 1, no_po: "", nama_pengrajin: "", harga: 0, gambar_path: "" }] });
@@ -104,6 +126,14 @@ export default function SPKPage() {
     window.open(`${API}/export/spk/${spkId}/pdf`, '_blank');
   };
 
+  const deleteSpk = async (id) => {
+    try {
+      await axios.delete(`${API}/spk/${id}`);
+      toast.success("SPK dihapus");
+      load();
+    } catch (e) { toast.error("Gagal hapus"); }
+  };
+
   return (
     <div className="space-y-6" data-testid="spk-page">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -132,7 +162,15 @@ export default function SPKPage() {
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <Label>Daftar Barang</Label>
-                    <Button size="sm" variant="outline" onClick={addItem} data-testid="add-spk-item"><Plus className="w-3 h-3 mr-1" /> Tambah</Button>
+                    <div className="flex gap-2">
+                      <Select onValueChange={importFromPO}>
+                        <SelectTrigger className="w-48 h-8 text-xs" data-testid="import-from-po"><SelectValue placeholder="Import dari PO..." /></SelectTrigger>
+                        <SelectContent>
+                          {poList.map((p, i) => <SelectItem key={i} value={p._id || `${i}`}>{p.no_po}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <Button size="sm" variant="outline" onClick={addItem} data-testid="add-spk-item"><Plus className="w-3 h-3 mr-1" /> Manual</Button>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     {form.items.map((item, idx) => (
@@ -202,7 +240,25 @@ export default function SPKPage() {
                   <p className="text-sm text-[#5C5C5C]">Owner: {spk.owner_perusahaan}</p>
                 </div>
                 <div className="flex gap-2">
+                  {canEdit && <Button variant="outline" size="sm" onClick={() => setDetail(spk)} data-testid={`view-spk-${idx}`}>Detail</Button>}
                   {canEdit && <Button variant="outline" size="sm" onClick={() => startEdit(spk)} data-testid={`edit-spk-${idx}`}><Edit className="w-3 h-3 mr-1" /> Edit</Button>}
+                  {canEdit && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="outline" size="sm" className="text-[#F44336]" data-testid={`delete-spk-${idx}`}><Trash2 className="w-3 h-3" /></Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Hapus SPK?</AlertDialogTitle>
+                          <AlertDialogDescription>SPK {spk.no_spk} akan dihapus permanen.</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Batal</AlertDialogCancel>
+                          <AlertDialogAction className="bg-[#F44336]" onClick={() => deleteSpk(spk._id)}>Hapus</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
                   <Button variant="outline" size="sm" onClick={() => downloadPDF(spk._id)} data-testid={`pdf-spk-${idx}`}><Download className="w-3 h-3 mr-1" /> PDF</Button>
                 </div>
               </div>
@@ -230,6 +286,36 @@ export default function SPKPage() {
           ))
         )}
       </div>
+      <Dialog open={!!detail} onOpenChange={() => setDetail(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Detail SPK: {detail?.no_spk}</DialogTitle></DialogHeader>
+          {detail && (
+            <div className="space-y-4">
+              <div className="text-sm">
+                <p><strong>Deadline:</strong> {detail.deadline}</p>
+                <p><strong>Owner:</strong> {detail.owner_perusahaan}</p>
+              </div>
+              {detail.items?.map((item, i) => (
+                <div key={i} className="flex gap-4 p-3 border border-[#E5E5E5] rounded-md">
+                  {item.gambar_path && <img src={`${API}/files/${item.gambar_path}`} className="w-24 h-24 object-cover rounded" alt="" />}
+                  <div className="flex-1">
+                    <h4 className="font-bold text-[#1A1A1A]">{item.nama_barang}</h4>
+                    {canSeeCraftsman && <p className="text-sm">Pengrajin: {item.nama_pengrajin}</p>}
+                    <p className="text-sm text-[#5C5C5C]">{item.spesifikasi}</p>
+                    <p className="text-sm mt-1">No PO: <strong>{item.no_po}</strong> | Qty: <strong>{item.qty}</strong></p>
+                    {canSeePrice && item.harga > 0 && <p className="text-sm text-[#4CAF50]">Rp {item.harga?.toLocaleString('id-ID')}</p>}
+                  </div>
+                </div>
+              ))}
+              {detail.catatan_pembayaran && (
+                <div className="p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]">
+                  <p className="text-sm"><strong>Catatan Pembayaran:</strong> {detail.catatan_pembayaran}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
