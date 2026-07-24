@@ -1,89 +1,65 @@
 # AGFDATA - Furniture Data Management System
 
 ## Original Problem Statement
-Aplikasi rekap data barang furniture "AGFDATA" dengan menu Database Barang, PO, Barang Masuk, Staffing, SPK, Progres Barang, dan Rekap Data. Aplikasi harus mobile responsive dan mendukung 3 role: admin (full access), staff (edit barang masuk/staffing/progres, harga disembunyikan), dan tamu (view only, harga dan nama pengrajin disembunyikan).
+Aplikasi rekap data barang furniture "AGFDATA" - Database Barang, PO, Barang Masuk, Staffing, SPK, Progres Barang, Rekap Data dengan 3 role (admin/staff/tamu), mobile responsive.
 
 ## Architecture
-- **Backend**: FastAPI + MongoDB (Motor async) + JWT auth via httpOnly cookies
-- **Frontend**: React + shadcn/ui + Tailwind CSS + react-router-dom
-- **Storage**: Emergent Object Storage for image uploads
-- **Exports**: ReportLab (PDF with images), pandas + xlsxwriter (Excel), XLSX.js (CSV/Excel)
-
-## User Personas
-1. **Admin**: Full access, user management, all filters
-2. **Staff**: Edit Barang Masuk/Staffing/Progres, prices hidden, all filters
-3. **Tamu (Guest)**: View-only, prices + craftsman hidden, all filters usable
+- Backend: FastAPI + MongoDB (Motor) + JWT httpOnly cookies
+- Frontend: React + shadcn/ui + Tailwind
+- Storage: Emergent Object Storage
+- Exports: ReportLab (PDF+images), xlsxwriter (Excel+embedded images), XLSX.js (CSV)
 
 ## Test Credentials
 - Admin: admin@agfdata.com / admin123
 - Staff: staff@agfdata.com / staff123
 - Tamu: tamu@agfdata.com / tamu123
 
-## Implementation History
+## Implementation Log
+
+### Iteration 4 (Feb 2026 - Filter, Export & Print refinement)
+- Barang Masuk qty auto-limited to (PO qty - already received)
+- Staffing: item selection with checkbox + qty limit from PO qty + PDF/Excel/Print buttons
+- Progres Print CSS: landscape A4, images small (max 50px), compact table 9px
+- Rekap Data: Print button in header, landscape print
+- Rekap Staffing redesigned: [Foto, No PO, Barang, Qty PO, Qty Staffing, Kurang Kirim] - removed pengrajin, added Qty PO & Kurang Kirim
+- Barang Masuk: search now matches nama_barang & nama_pengrajin (not just no_po/penerima) + PDF/Excel/Print buttons with search-based filter
+- Excel exports: photo column with embedded thumbnails (80x80) via xlsxwriter insert_image
+- Startup migration: cleans legacy progres records with empty po_id
+
+### Iteration 3 (Feb 2026)
+- Progres Barang refactor: PO-based grouping, syncs from barang masuk, packing capped at qty_masuk
+- Progres PDF export with tanggal filter
+- Barang Masuk item selection (checkbox)
+- Rekap PO filter dropdown by No PO
+- DELETE 404 responses
+- Print CSS foundation
+
+### Iteration 2 (Feb 2026)
+- User Management CRUD, Delete/Edit/Search/Preview across all resources
+- SPK auto-fill from PO, improved PDF with images + signatures
+- Rekap: 5 tabs (PO/Per Barang/Progres/Pengrajin/Staffing)
 
 ### Iteration 1 (Feb 2026 - MVP)
-- Auth, RBAC, 7 core modules (Barang/PO/BM/Staffing/SPK/Progres/Rekap), image upload, exports, mobile responsive
+- Auth, RBAC, 7 core modules, image upload, exports, mobile responsive
 
-### Iteration 2 (Feb 2026 - Enhancements)
-- User Management CRUD, Delete/Edit/Search/Preview across all resources
-- SPK auto-fill from PO, PDF with images + signature area
-- Rekap: 5 tabs (PO/Per Barang/Progres/Pengrajin/Staffing)
-- "Remaining" → "Kurang Kirim"
-
-### Iteration 3 (Feb 2026 - Progres Refactor + Filters)
-- Progres Barang: PO-based grouping (`GET /api/progres/by-po`), syncs from barang masuk
-- Packing qty capped at qty_masuk (auto-clamped when qty_masuk=0)
-- Progres PDF export with optional tanggal filter (`GET /api/export/progres/pdf?tanggal=YYYY-MM-DD`)
-- Print CSS: hides sidebar/header/buttons on `window.print()`
-- Barang Masuk: checkbox to select which items to include from PO
-- Rekap PO: Filter dropdown by No PO (`?no_po=X`)
-- Rekap Per Barang: Also filters by no_po
-- DELETE endpoints return proper 404 with detail message
-- All filters accessible to admin/staff/guest
-
-## Backlog
+## Deferred / Backlog
 
 ### P1
-- Split server.py (~1415 lines) into router modules (backend/routers/)
-- MongoDB aggregation pipelines for rekap queries (currently O(n²) Python joins)
-- Charts/visualizations in Rekap Data
+- Split server.py into router modules (currently ~1500 lines but working stable)
+- MongoDB aggregation pipelines for rekap queries (replace Python O(n²) joins)
+- Charts/visualizations (Recharts) in Rekap Data
 
 ### P2
-- One-time migration to normalize legacy progres records (empty po_id)
-- WhatsApp/Twilio notifications for pengrajin
-- Barcode/QR scanning for check-in
-- Multi-file image gallery per barang
+- Multi-pengrajin per barang (currently single string field)
+- WhatsApp/Twilio notifications
+- Barcode/QR scanning
 - Audit log
 
-## API Endpoints Summary
-### Auth
-POST /api/auth/login, GET /api/auth/me, POST /api/auth/logout
-
-### File Upload/Download
-POST /api/upload, GET /api/files/{path}
-
-### Resources (CRUD)
-- /api/barang (search)
-- /api/po (search)
-- /api/barang-masuk
-- /api/staffing (filter tanggal)
-- /api/spk (search)
-- /api/users (admin only)
-
-### Progres
-GET/POST /api/progres, GET /api/progres/by-po
-
-### Rekap
-- GET /api/rekap/all-po?no_po=X
-- GET /api/rekap/per-pengrajin
-- GET /api/rekap/per-barang?no_po=X
-- GET /api/rekap/progres
-- GET /api/rekap/staffing-detail?tanggal_from&tanggal_to
-
-### Exports
-- GET /api/export/po/{id}/pdf
-- GET /api/export/spk/{id}/pdf
-- GET /api/export/barang-masuk/{id}/pdf
-- GET /api/export/staffing/{id}/pdf
-- GET /api/export/progres/pdf?tanggal=YYYY-MM-DD
-- GET /api/export/barang-masuk/excel
+## API Summary
+- Auth: /api/auth/login|me|logout
+- Upload: /api/upload, /api/files/{path}
+- CRUD: /api/{barang|po|barang-masuk|staffing|spk|users}
+- Progres: GET/POST /api/progres, GET /api/progres/by-po
+- Rekap: /api/rekap/{all-po|per-pengrajin|per-barang|progres|staffing-detail|staffing-summary}
+- Exports (PDF): /api/export/{po|spk|barang-masuk|staffing}/{id}/pdf, /api/export/{barang-masuk|staffing|progres}/pdf, /api/export/progres/pdf?tanggal=
+- Exports (Excel with images): /api/export/{barang-masuk|staffing}/excel
