@@ -16,6 +16,13 @@ Aplikasi rekap data barang furniture "AGFDATA" - Database Barang, PO, Barang Mas
 
 ## Implementation Log
 
+### Iteration 7 (Feb 2026) - Staffing-by-Ready + PO Totals + SPK Pengrajin/Note + Multi-Pengrajin Barang
+- **Staffing dilimit oleh qty_ready (packing dari Progres)**: `/api/po*` now returns `qty_ready` per item (sum of `progres.packing`). `create_staffing` & `update_staffing` cap qty by `min(qty_po - staffed, qty_ready - staffed)` and return HTTP 400 with `Ready: X ... sisa: Y`. Frontend Staffing dialog shows Ready label + caps input.
+- **PO subtotal + grand total**: UI shows `qty × harga_jual` per item and Grand Total per PO card. Detail modal shows itemized subtotal + Grand Total banner. PDF export table now has Harga Jual + Subtotal columns + Grand Total row.
+- **SPK per-item pengrajin dropdown + note**: If barang has `pengrajin_list`, SPK dialog shows Select dropdown with primary + all alternates; else plain Input. Added per-item `catatan` field displayed in card & detail with 📝 prefix.
+- **Database Barang multi-pengrajin**: Added `pengrajin_list: List[str]` to BarangCreate. Dialog has "Pengrajin Tambahan" section with Add/Remove UI. Card badge shows "+N lainnya". Guest role hides both `nama_pengrajin` and `pengrajin_list`.
+- Tests: 15/15 backend pass (test_iter7.py) + all 4 frontend features verified
+
 ### Iteration 6 (Feb 2026) - Data Integrity + Validation Hardening
 - **BUG FIX**: `update_po` now preserves cumulative `qty_staffed` and `qty_diterima` per barang_id (was resetting to 0 on edit)
 - **Pydantic models**: added `BarangMasukItem` & `StaffingItem` (Field ge=0, barang_id required) - replaces raw `List[Dict[str, Any]]`

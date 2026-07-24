@@ -62,7 +62,7 @@ export default function SPKPage() {
   };
 
   const addItem = () => {
-    setForm({ ...form, items: [...form.items, { barang_id: "", nama_barang: "", spesifikasi: "", qty: 1, no_po: "", nama_pengrajin: "", harga: 0, gambar_path: "" }] });
+    setForm({ ...form, items: [...form.items, { barang_id: "", nama_barang: "", spesifikasi: "", qty: 1, no_po: "", nama_pengrajin: "", pengrajin_list: [], harga: 0, gambar_path: "", catatan: "" }] });
   };
 
   const removeItem = (idx) => {
