@@ -1254,24 +1254,25 @@ async def delete_po(po_id: str, user: dict = Depends(get_current_user)):
 async def update_bm(bm_id: str, bm: BarangMasukCreate, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin", "staff"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    # Revert old qty from PO first (so validation uses net current)
     old = await db.barang_masuk.find_one({"_id": ObjectId(bm_id)})
-    if old:
-        for item in old.get("items", []):
-            await db.po.update_one({"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]}, {"$inc": {"items.$.qty_diterima": -(item.get("qty_diterima", 0) or 0)}})
-    
     po = await db.po.find_one({"_id": ObjectId(bm.po_id)})
     if not po:
         raise HTTPException(status_code=404, detail="PO not found")
     
-    # Validate against remaining
+    # Validate first (using "current qty_diterima minus own old contribution") before mutating PO
+    own_old = {}
+    if old and old.get("po_id") == bm.po_id:
+        for item in old.get("items", []):
+            own_old[item.get("barang_id")] = own_old.get(item.get("barang_id"), 0) + (item.get("qty_diterima", 0) or 0)
+    
     po_items_map = {it.get("barang_id"): it for it in po.get("items", [])}
     items_dicts = []
     for it in bm.items:
         po_item = po_items_map.get(it.barang_id)
         if not po_item:
             raise HTTPException(status_code=400, detail=f"Barang {it.barang_id} tidak ada di PO ini")
-        sisa = (po_item.get("qty", 0) or 0) - (po_item.get("qty_diterima", 0) or 0)
+        current_others = (po_item.get("qty_diterima", 0) or 0) - own_old.get(it.barang_id, 0)
+        sisa = (po_item.get("qty", 0) or 0) - current_others
         if it.qty_diterima > sisa:
             raise HTTPException(
                 status_code=400,
@@ -1285,6 +1286,10 @@ async def update_bm(bm_id: str, bm: BarangMasukCreate, user: dict = Depends(get_
             "gambar_path": po_item.get("gambar_path"),
         })
     
+    # Validation passed - safe to mutate: revert old, then apply new
+    if old:
+        for item in old.get("items", []):
+            await db.po.update_one({"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]}, {"$inc": {"items.$.qty_diterima": -(item.get("qty_diterima", 0) or 0)}})
     doc = {"po_id": bm.po_id, "no_po": po["no_po"], "tanggal_masuk": bm.tanggal_masuk, "penerima": bm.penerima, "items": items_dicts}
     await db.barang_masuk.update_one({"_id": ObjectId(bm_id)}, {"$set": doc})
     for item in items_dicts:
@@ -1312,29 +1317,25 @@ async def delete_bm(bm_id: str, user: dict = Depends(get_current_user)):
 async def update_staffing(st_id: str, staffing: StaffingCreate, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin", "staff"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    # Revert old qty_staffed first
     old = await db.staffing.find_one({"_id": ObjectId(st_id)})
-    if old:
-        for item in old.get("items", []):
-            try:
-                await db.po.update_one(
-                    {"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]},
-                    {"$inc": {"items.$.qty_staffed": -(item.get("qty", 0) or 0)}}
-                )
-            except Exception:
-                pass
     po = await db.po.find_one({"_id": ObjectId(staffing.po_id)})
     if not po:
         raise HTTPException(status_code=404, detail="PO not found")
     
-    # Validate against remaining
+    # Validate first (subtract own old contribution) before mutating PO
+    own_old = {}
+    if old and old.get("po_id") == staffing.po_id:
+        for item in old.get("items", []):
+            own_old[item.get("barang_id")] = own_old.get(item.get("barang_id"), 0) + (item.get("qty", 0) or 0)
+    
     po_items_map = {it.get("barang_id"): it for it in po.get("items", [])}
     items_dicts = []
     for it in staffing.items:
         po_item = po_items_map.get(it.barang_id)
         if not po_item:
             raise HTTPException(status_code=400, detail=f"Barang {it.barang_id} tidak ada di PO ini")
-        sisa = (po_item.get("qty", 0) or 0) - (po_item.get("qty_staffed", 0) or 0)
+        current_others = (po_item.get("qty_staffed", 0) or 0) - own_old.get(it.barang_id, 0)
+        sisa = (po_item.get("qty", 0) or 0) - current_others
         if it.qty > sisa:
             raise HTTPException(
                 status_code=400,
@@ -1348,9 +1349,18 @@ async def update_staffing(st_id: str, staffing: StaffingCreate, user: dict = Dep
             "gambar_path": po_item.get("gambar_path"),
         })
     
+    # Validation passed - safe to mutate: revert old, then apply new
+    if old:
+        for item in old.get("items", []):
+            try:
+                await db.po.update_one(
+                    {"_id": ObjectId(old["po_id"]), "items.barang_id": item["barang_id"]},
+                    {"$inc": {"items.$.qty_staffed": -(item.get("qty", 0) or 0)}}
+                )
+            except Exception:
+                pass
     doc = {"po_id": staffing.po_id, "no_po": po["no_po"], "tanggal_keluar": staffing.tanggal_keluar, "items": items_dicts}
     await db.staffing.update_one({"_id": ObjectId(st_id)}, {"$set": doc})
-    # Apply new qty_staffed
     for item in items_dicts:
         await db.po.update_one(
             {"_id": ObjectId(staffing.po_id), "items.barang_id": item["barang_id"]},

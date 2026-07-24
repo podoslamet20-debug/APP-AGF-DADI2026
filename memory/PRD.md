@@ -16,6 +16,16 @@ Aplikasi rekap data barang furniture "AGFDATA" - Database Barang, PO, Barang Mas
 
 ## Implementation Log
 
+### Iteration 6 (Feb 2026) - Data Integrity + Validation Hardening
+- **BUG FIX**: `update_po` now preserves cumulative `qty_staffed` and `qty_diterima` per barang_id (was resetting to 0 on edit)
+- **Pydantic models**: added `BarangMasukItem` & `StaffingItem` (Field ge=0, barang_id required) - replaces raw `List[Dict[str, Any]]`
+- **Backend validation**: `create/update_barang_masuk` and `create/update_staffing` reject qty > sisa PO with descriptive Indonesian error (HTTP 400)
+- **Validation ordering fix**: `update_bm`/`update_staffing` now validate BEFORE reverting PO counters (prevents negative qty_staffed on failed 400)
+- **Frontend UX**: BM dialog shows "Total PO: X • Sudah Diterima: Y • Sisa: Z"; Staffing shows "Total PO: X • Sudah dikirim: Y • Sisa: Z"; edit dialogs recalculate sisa by subtracting own record's contribution
+- **Rekap PO export** (Excel/CSV): added `Status` column with joined labels (Komplit SPK, Komplit Pengrajin, Komplit Terkirim, Ready, or Proses)
+- Cleanup: purged 5 leftover TEST_ITER6_* PO records
+- Tests: 16/16 backend pass + full frontend flows verified (iter6)
+
 ### Iteration 5 (Feb 2026) - PO Status Badges + Staffing Sisa
 - **Staffing qty auto-limit**: Max = qty_po - qty_staffed (updates after each staffing)
 - **PO items** now have `qty_staffed` field auto-updated by create/update/delete staffing
@@ -55,13 +65,12 @@ Aplikasi rekap data barang furniture "AGFDATA" - Database Barang, PO, Barang Mas
 ## Deferred / Backlog
 
 ### P1
-- **Split server.py** (1617 lines) into router modules - flagged 3 iterations in a row
+- **Split server.py** (~1750 lines) into router modules - flagged 4 iterations in a row
 - MongoDB $lookup aggregation pipelines for rekap (replace Python O(n²) joins)
 - Compound unique index on progres (po_id, item_id)
-- `update_po` preserves qty_staffed on edit (currently resets to 0)
+- One-time migration script to purge legacy progres with empty po_id
 
 ### P2
-- Pydantic StaffingItem/BarangMasukItem models (currently raw list[dict])
 - Multi-pengrajin per barang
 - WhatsApp/Twilio notifications
 - Barcode/QR scanning
