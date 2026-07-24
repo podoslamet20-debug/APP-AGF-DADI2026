@@ -1,0 +1,92 @@
+{
+  "project_name": "AGFDATA",
+  "theme": {
+    "mode": "light",
+    "description": "Professional, earthy yet functional dashboard. 'ORGANIC & EARTHY' mixed with 'SWISS HIGH-CONTRAST'. Clean, data-heavy, but with subtle warm tones (wood/furniture reference) instead of generic tech blue."
+  },
+  "typography": {
+    "headings": "Cabinet Grotesk",
+    "body": "Inter",
+    "rules": "Avoid using Inter for headings. Use tracking-tight for large headings. Maintain minimum 4.5:1 contrast ratio for text below 18px. Do not center-align paragraphs or dense data tables."
+  },
+  "colors": {
+    "primary": "#8B5A2B", 
+    "secondary": "#D2B48C",
+    "background": "#FAFAFA",
+    "surface": "#FFFFFF",
+    "text_primary": "#1A1A1A",
+    "text_secondary": "#5C5C5C",
+    "accent": "#4CAF50",
+    "danger": "#F44336",
+    "warning": "#FFC107",
+    "border": "#E5E5E5"
+  },
+  "visual_enhancers": {
+    "shadows": "Use subtle nested shadows for cards and dropdowns (e.g., shadow-sm for default state, shadow-md for hover/active state).",
+    "borders": "1px solid #E5E5E5, rounded corners (max 8px border-radius) for a slightly softer, earthy feel.",
+    "glassmorphism": "Not recommended for data-heavy dashboard cells to prevent visual distraction, but acceptable for sticky headers or modals."
+  },
+  "grids_layouts": {
+    "dashboard_grid": "High density grid. Base Grid: grid-cols-1 md:grid-cols-3 lg:grid-cols-4 or 12-column layout. Gap: gap-4 or gap-6.",
+    "spacing": "Generous Spacing Philosophy: Use 2-3x more spacing for breathing room. Tailwind scale: p-4, p-6, p-8. Ensure internal padding for bordered containers to prevent text collision.",
+    "alignment": "Optical alignment over geometrical. Left-align dense content, lists, forms, tabular data."
+  },
+  "component_rules": {
+    "tables": "Use Shadcn/UI tables. Must be responsive. High contrast headers. Striped or hoverable rows for readability.",
+    "cards": "Go flat, rectangular, dense styles. Avoid over-using card wrappers if a pure grid suffices.",
+    "forms": "Use Shadcn forms (Input, Select). Required: Explicit focus states (focus:ring-2 focus:ring-primary/50).",
+    "buttons": "Modern, slightly rounded (rounded-md). Explicit hover states (e.g., hover:brightness-110). Primary action buttons use primary color.",
+    "navigation": "Sidebar for desktop, hamburger + drawer for mobile. Sticky header with user profile and role indication."
+  },
+  "motion": {
+    "rules": "Micro-interactions on hover (buttons, table rows, links). Subtle entrance animations for dashboard widgets (staggered fade-in). Do not use 'transition-all'."
+  },
+  "accessibility": {
+    "contrast": "APCA preferred or WCAG AA minimum. Focus rings mandatory.",
+    "testing": "All interactive and key informational elements MUST include `data-testid` attribute (kebab-case, role-based).",
+    "motion": "Respect prefers-reduced-motion."
+  },
+  "media": {
+    "image_urls": {
+      "furniture_items": [
+        "https://images.unsplash.com/photo-1581539250439-c96689b516dd?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzN8MHwxfHNlYXJjaHw0fHx3b29kZW4lMjBjaGFpcnxlbnwwfHx8fDE3ODQ4Nzg2MDV8MA&ixlib=rb-4.1.0&q=85",
+        "https://images.pexels.com/photos/29917912/pexels-photo-29917912.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "https://images.unsplash.com/photo-1519219788971-8d9797e0928e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwzfHx3b29kZW4lMjB0YWJsZXxlbnwwfHx8fDE3ODQ4Nzg2MDV8MA&ixlib=rb-4.1.0&q=85"
+      ],
+      "users_craftsmen": [
+        "https://images.unsplash.com/photo-1664382953403-fc1ac77073a0?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzZ8MHwxfHNlYXJjaHwzfHx3YXJlaG91c2UlMjB3b3JrZXJ8ZW58MHx8fHwxNzg0ODc4NjA1fDA&ixlib=rb-4.1.0&q=85",
+        "https://images.pexels.com/photos/4483865/pexels-photo-4483865.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+      ]
+    }
+  },
+  "instructions_to_main_agent": [
+    "You are building 'AGFDATA', a complex furniture production and inventory dashboard.",
+    "Implement Role-Based Access Control UI: Admin (full access), Staff (hide prices, manage specific sections), Guest (view only, hide prices and craftsman names).",
+    "Implement the following main menus: Database Barang, PO, Barang Masuk, Staffing, SPK, Progres Barang, Rekap Data.",
+    "Ensure all menus dynamically auto-fill data based on the 'PO' and 'Database Barang' structures as defined in requirements.",
+    "Implement Export options (Excel/CSV/PDF) and Print layouts (especially for SPK and PO).",
+    "Make sure the UI is mobile responsive (critical requirement: 'bisa dibuka di browser hp').",
+    "Use lucide-react for crisp, professional iconography.",
+    "Use Recharts or Shadcn Charts for 'Rekap Data' visual summaries.",
+    "Do NOT use completely transparent backgrounds in dropdowns, sticky headers, or modals.",
+    "Add `data-testid` attributes to all interactive elements for robust automated testing."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "GENERAL UI UX DESIGN GUIDELINES",
+    "Do not converge toward generic, 'on distribution' outputs. Avoid the 'AI slop' aesthetic.",
+    "Do not make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) where applicable, but not on data tables.",
+    "Do NOT apply universal transition (e.g., `transition: all`). Add transitions for specific properties.",
+    "Do NOT center align the app container (`.App { text-align: center; }`).",
+    "Use modern button styles with interaction animations & color relevant to the app style.",
+    "NEVER use emoji characters for icons. Use proper icon libraries.",
+    "Every interaction needs micro-animations - hover states, transitions.",
+    "Use generous spacing (2-3x more than usual) to avoid cramped designs.",
+    "Use sonner for toast notifications.",
+    "DO NOT use placeholder URLs for images. Use the provided image URLs.",
+    "Prioritize using pre-existing components from src/components/ui when applicable.",
+    "Ensure the final dashboard is accessible, with focus states and contrast compliance.",
+    "All interactive and key informational elements MUST include a `data-testid` attribute to facilitate robust automated testing."
+  ]
+}
