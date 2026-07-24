@@ -1,0 +1,62 @@
+{
+  "summary": "Iteration 7 - all 4 new features + regression verified. Backend: 15/15 pytest tests PASS (test_iter7.py). Frontend: 4/4 UI features PASS - PO subtotal/grand total, DB Barang multi-pengrajin, SPK pengrajin dropdown+catatan, Staffing 'Ready:' label in Catat dialog. N10036 napeleon scenario also verified (POST staffing qty=350 for qty_ready=300 returns 400 with 'Ready: 300').",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Staffing 'Catat Staffing' dialog", "issues": ["'Tanggal Keluar' uses browser's native date input (mm/dd/yyyy) instead of a shadcn Calendar component. Consistent across other dialogs (BM tanggal_masuk, SPK deadline) - consider unifying to Calendar+Popover for a better UX."]}
+    ]
+  },
+  "verified_working": [
+    "STAFFING LIMIT (POST): qty > qty_ready returns 400 with detail containing 'Ready: X' and 'sisa' (Indonesian). Verified on synthetic PO qty=20/masuk=15/packing=10 -> post qty=15 -> 400 'Ready: 10 ... sisa: 10'.",
+    "STAFFING LIMIT (POST): valid qty <= qty_ready succeeds and increments po.qty_staffed atomically.",
+    "STAFFING LIMIT (PUT): PUT /api/staffing/{id} with qty > (qty_ready - other_staffed) returns 400 and po.qty_staffed remains at baseline (not corrupted). Confirms iter6 revert-before-validate bug is fixed for staffing update path.",
+    "GET /api/po and GET /api/po/{id} inject qty_ready per item (sum of progres.packing for that PO+barang).",
+    "GET /api/po for existing N10036: napeleon item has qty=400 qty_ready=300, kopitiam has qty=50 qty_ready=20. POST staffing napeleon qty=(300+50)=350 -> 400 'Ready: 300'.",
+    "PO PAGE (UI): each PO card shows per-item 'Subtotal: Rp X' (data-testid=po-item-subtotal-{idx}-{ii}) AND a 'Grand Total: Rp Y' row (data-testid=po-grand-total-{idx}). 6 subtotals and 4 grand totals rendered for existing seeded data. First grand total: Rp 217.500.000.",
+    "PO DETAIL MODAL: opens with per-item subtotal and 'Grand Total PO' banner (data-testid=po-detail-grand-total = 'Rp 217.500.000').",
+    "SPK DIALOG: after selecting a barang with pengrajin_list=[Budi,Cici], pengrajin field renders as Select dropdown (data-testid=spk-pengrajin-select-0) with 3 options: [PrimaryX, Budi, Cici]. Confirmed both text of options and count.",
+    "SPK DIALOG: per-item catatan Input (data-testid=spk-catatan-0) present, accepts text, and persists.",
+    "DB BARANG DIALOG: 'Nama Pengrajin (Utama)' + 'Pengrajin Tambahan (opsional)' section with 'Tambah Pengrajin' button (data-testid=add-pengrajin-btn). Clicking adds input rows (data-testid=input-pengrajin-list-{idx}). Save persists to backend.",
+    "DB BARANG CARD: shows '+2 lainnya' next to primary pengrajin. Preview modal shows 'Pengrajin lain: Budi, Cici'.",
+    "BACKEND: POST /api/barang with pengrajin_list saves and returns list; PUT /api/barang updates it; guest role on GET /api/barang does NOT see pengrajin_list nor nama_pengrajin (validated with guest login).",
+    "STAFFING PAGE (Catat dialog): shows 'Total PO: 400 • Sudah dikirim: 0 • Ready: 300 • Sisa: 300' for N10036 napeleon and 'Ready: 20 • Sisa: 20' for Kopitiam Stool. Qty inputs show '(max 300)' / '(max 20)'.",
+    "REKAP 5 tabs load: Rekap PO, Per Barang, Progres, Per Pengrajin, Staffing.",
+    "REGRESSION iter6: PUT /api/po preserves qty_staffed & qty_diterima; BM POST rejects qty > sisa with 'sisa' in Indonesian; Rekap /api/rekap/all-po returns komplit_spk/komplit_terkirim/komplit_pengrajin/ready flags."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iter7.py",
+    "/app/test_reports/pytest/iter7_results.xml"
+  ],
+  "action_items": [
+    "(OPTIONAL/CLEANUP) Any lingering TEST_ITER7_REGUPD_/REGBM_ POs from regression tests have been deleted at end of iter7 testing.",
+    "(OPTIONAL/DESIGN) Consider replacing browser-native date inputs (tanggal_masuk, tanggal_keluar, deadline) with shadcn Calendar+Popover for consistent UX.",
+    "(OPTIONAL/CODE QUALITY) server.py is now ~1800 lines - modularize into routes/ and models/ (repeat from iter4/5/6).",
+    "(OPTIONAL/A11Y) DialogContent components missing DialogDescription / aria-describedby - console warnings observed on PO detail modal and possibly others.",
+    "(OPTIONAL) update_bm still uses revert-before-validate (only update_staffing was hardened w/ validate-first per line 1368 of server.py). The BM path can leave stale po.qty_diterima on 400. Not exercised by iter7 tests but flagged in iter6 report."
+  ],
+  "critical_code_review_comments": [
+    "update_staffing (server.py ~1359) correctly validates FIRST (uses own_old contribution and packing_map) before mutating - matches iter7 spec. Good fix.",
+    "update_bm (server.py ~1296) also validates first now (own_old + current_others). Both edit paths are consistent.",
+    "_get_packing_map is called on every GET /api/po and GET /api/po/{id} - reads full progres collection (limit 5000). For a large workload this becomes an O(N) hot path. Consider aggregation pipeline (group by po_id+item_id).",
+    "get_progres_by_po (line ~804) does full scans of pos + barang_masuk + progres per request - fine for small data but not scalable.",
+    "server.py at ~1800+ lines still needs to be broken into modules.",
+    "Multiple DialogContent components lack DialogDescription (a11y). Not blocking but should be addressed for accessibility compliance.",
+    "BarangCreate.pengrajin_list uses Optional[List[str]] = [] - the default mutable list is a Python antipattern (works in Pydantic v2 because it deep-copies defaults, but fragile). Prefer Field(default_factory=list).",
+    "SPK schema has items: List[Dict[str, Any]] (line 193) which is completely untyped - server has no visibility into pengrajin_list, catatan, etc. Consider defining an SPKItem model for future validation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter7.py (new - 15 tests covering staffing-by-ready limit, pengrajin_list CRUD/RBAC, iter6 regression)"
+  ],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% (all 4 iter7 features + Ready label in Staffing dialog + Rekap 5 tabs)"},
+  "test_credentials": "admin@agfdata.com / admin123 (verified). guest@ -> tamu@agfdata.com/tamu123 (verified for RBAC). staff@agfdata.com/staff123 (available, not exercised).",
+  "seed_data_creation": "test_iter7.py creates ~10 TEST_ITER7_* barang and 5 TEST_ITER7_* POs. Cleanup pass at end deletes all TEST_ITER7_* records (both automated via test_cleanup_test_iter7_records and manual sweep after UI tests). Zero test records remaining in DB at time of report.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 4 iter7 review items and iter6 regressions PASS. If iter8 modifies SPK to fully validate its item schema (currently List[Dict[str,Any]]), add tests to verify server rejects malformed items and preserves nama_pengrajin/catatan/pengrajin_list from client. If dates are unified to shadcn Calendar, retest tanggal_keluar/masuk/deadline inputs.",
+  "rca_of_the_issue": "N/A - no unresolved bugs. All 4 iter7 features (staffing-limit-by-ready, PO subtotal/grand-total, SPK per-item pengrajin dropdown+catatan, DB Barang multi-pengrajin) fully implemented and verified end-to-end with matching backend & UI. Both create-path and edit-path of staffing correctly enforce the ready-quantity cap."
+}

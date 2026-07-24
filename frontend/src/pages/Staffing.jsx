@@ -41,8 +41,12 @@ export default function Staffing() {
     if (!po) return;
     setSelectedPO(po);
     setForm({ ...form, po_id: poId, items: po.items.map(i => {
-      const sisa = (i.qty || 0) - (i.qty_staffed || 0);
-      return { ...i, _original_qty: i.qty || 0, qty: 0, _selected: true, _max_qty: sisa, _sisa: sisa };
+      const qtyReady = i.qty_ready || 0;
+      const qtyStaffed = i.qty_staffed || 0;
+      const sisaPO = (i.qty || 0) - qtyStaffed;
+      const sisaReady = qtyReady - qtyStaffed;
+      const sisa = Math.max(0, Math.min(sisaPO, sisaReady));
+      return { ...i, _original_qty: i.qty || 0, qty: 0, _selected: true, _max_qty: sisa, _sisa: sisa, _qty_ready: qtyReady };
     }) });
   };
 
@@ -95,7 +99,10 @@ export default function Staffing() {
       const own = stMap.get(pi.barang_id);
       const ownQty = own?.qty || 0;
       const otherStaffed = (pi.qty_staffed || 0) - ownQty;
-      const sisa = (pi.qty || 0) - otherStaffed;
+      const qtyReady = pi.qty_ready || 0;
+      const sisaPO = (pi.qty || 0) - otherStaffed;
+      const sisaReady = qtyReady - otherStaffed;
+      const sisa = Math.max(0, Math.min(sisaPO, sisaReady));
       return {
         ...pi,
         _original_qty: pi.qty || 0,
@@ -103,6 +110,7 @@ export default function Staffing() {
         _selected: !!own,
         _max_qty: sisa,
         _sisa: sisa,
+        _qty_ready: qtyReady,
         qty_staffed: otherStaffed,
       };
     });
@@ -175,7 +183,7 @@ export default function Staffing() {
                           <div className="flex-1">
                             <p className="font-medium text-sm">{item.nama_barang}</p>
                             {canSeeCraftsman && <p className="text-xs text-[#5C5C5C]">{item.nama_pengrajin}</p>}
-                            <p className="text-xs text-[#5C5C5C]">Total PO: {item._original_qty || 0} • Sudah dikirim: {item.qty_staffed || 0} • Sisa: <strong className="text-[#8B5A2B]">{item._sisa || 0}</strong></p>
+                            <p className="text-xs text-[#5C5C5C]">Total PO: {item._original_qty || 0} • Sudah dikirim: {item.qty_staffed || 0} • <span className="text-[#2196F3]">Ready: {item._qty_ready || 0}</span> • Sisa: <strong className="text-[#8B5A2B]">{item._sisa || 0}</strong></p>
                           </div>
                           <div className="w-24">
                             <Label className="text-xs">Qty (max {item._max_qty || 0})</Label>

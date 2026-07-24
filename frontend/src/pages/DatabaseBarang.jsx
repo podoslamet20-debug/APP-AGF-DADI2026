@@ -27,6 +27,7 @@ export default function DatabaseBarang() {
     harga_jual: 0,
     catatan: "",
     gambar_path: "",
+    pengrajin_list: [],
   });
 
   const load = async () => {
@@ -70,7 +71,7 @@ export default function DatabaseBarang() {
       }
       setOpen(false);
       setEditingId(null);
-      setForm({ nama_barang: "", nama_pengrajin: "", spesifikasi: "", harga_pengrajin: 0, harga_jual: 0, catatan: "", gambar_path: "" });
+      setForm({ nama_barang: "", nama_pengrajin: "", spesifikasi: "", harga_pengrajin: 0, harga_jual: 0, catatan: "", gambar_path: "", pengrajin_list: [] });
       load();
     } catch (e) {
       toast.error("Gagal: " + (e.response?.data?.detail || ""));
@@ -86,9 +87,20 @@ export default function DatabaseBarang() {
       harga_jual: item.harga_jual || 0,
       catatan: item.catatan || "",
       gambar_path: item.gambar_path || "",
+      pengrajin_list: item.pengrajin_list || [],
     });
     setEditingId(item._id);
     setOpen(true);
+  };
+
+  const addPengrajin = () => setForm({ ...form, pengrajin_list: [...(form.pengrajin_list || []), ""] });
+  const updatePengrajin = (idx, val) => {
+    const list = [...(form.pengrajin_list || [])];
+    list[idx] = val;
+    setForm({ ...form, pengrajin_list: list });
+  };
+  const removePengrajin = (idx) => {
+    setForm({ ...form, pengrajin_list: (form.pengrajin_list || []).filter((_, i) => i !== idx) });
   };
 
   const deleteBarang = async (id) => {
@@ -107,7 +119,7 @@ export default function DatabaseBarang() {
           <p className="text-[#5C5C5C] mt-1">Master data barang furniture</p>
         </div>
         {canEdit && (
-          <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditingId(null); setForm({ nama_barang: "", nama_pengrajin: "", spesifikasi: "", harga_pengrajin: 0, harga_jual: 0, catatan: "", gambar_path: "" }); }}}>
+          <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditingId(null); setForm({ nama_barang: "", nama_pengrajin: "", spesifikasi: "", harga_pengrajin: 0, harga_jual: 0, catatan: "", gambar_path: "", pengrajin_list: [] }); }}}>
             <DialogTrigger asChild>
               <Button className="bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="add-barang-button">
                 <Plus className="w-4 h-4 mr-2" /> Tambah Barang
@@ -132,8 +144,23 @@ export default function DatabaseBarang() {
                     <Input data-testid="input-nama-barang" value={form.nama_barang} onChange={(e) => setForm({ ...form, nama_barang: e.target.value })} />
                   </div>
                   <div>
-                    <Label>Nama Pengrajin</Label>
+                    <Label>Nama Pengrajin (Utama)</Label>
                     <Input data-testid="input-nama-pengrajin" value={form.nama_pengrajin} onChange={(e) => setForm({ ...form, nama_pengrajin: e.target.value })} />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between">
+                    <Label>Pengrajin Tambahan (opsional)</Label>
+                    <Button type="button" variant="outline" size="sm" onClick={addPengrajin} data-testid="add-pengrajin-btn"><Plus className="w-3 h-3 mr-1" /> Tambah Pengrajin</Button>
+                  </div>
+                  <div className="space-y-2 mt-2">
+                    {(form.pengrajin_list || []).map((p, idx) => (
+                      <div key={idx} className="flex gap-2">
+                        <Input placeholder={`Pengrajin ${idx + 2}`} value={p} onChange={(e) => updatePengrajin(idx, e.target.value)} data-testid={`input-pengrajin-list-${idx}`} />
+                        <Button type="button" variant="outline" size="sm" className="text-[#F44336]" onClick={() => removePengrajin(idx)}><Trash2 className="w-3 h-3" /></Button>
+                      </div>
+                    ))}
+                    {(form.pengrajin_list || []).length === 0 && <p className="text-xs text-[#5C5C5C]">Belum ada pengrajin tambahan. Klik "Tambah Pengrajin" untuk menambah opsi (misal pengrajin 2, 3, 4) yang bisa dipilih saat membuat SPK.</p>}
                   </div>
                 </div>
                 <div>
@@ -193,7 +220,7 @@ export default function DatabaseBarang() {
               <div className="p-4">
                 <h3 className="font-bold text-[#1A1A1A]">{item.nama_barang}</h3>
                 {canSeeCraftsman && item.nama_pengrajin && (
-                  <p className="text-sm text-[#5C5C5C] mt-1">Pengrajin: {item.nama_pengrajin}</p>
+                  <p className="text-sm text-[#5C5C5C] mt-1">Pengrajin: {item.nama_pengrajin}{(item.pengrajin_list?.length > 0) && <span className="text-xs"> +{item.pengrajin_list.length} lainnya</span>}</p>
                 )}
                 <p className="text-xs text-[#5C5C5C] mt-2 line-clamp-2">{item.spesifikasi}</p>
                 {canSeePrice && (
@@ -235,7 +262,14 @@ export default function DatabaseBarang() {
           {preview && (
             <div className="space-y-3">
               {preview.gambar_path && <img src={`${API}/files/${preview.gambar_path}`} className="w-full h-64 object-cover rounded-md" alt="" />}
-              {canSeeCraftsman && preview.nama_pengrajin && <p><strong>Pengrajin:</strong> {preview.nama_pengrajin}</p>}
+              {canSeeCraftsman && preview.nama_pengrajin && (
+                <div>
+                  <p><strong>Pengrajin Utama:</strong> {preview.nama_pengrajin}</p>
+                  {preview.pengrajin_list?.length > 0 && (
+                    <p className="text-sm text-[#5C5C5C]"><strong>Pengrajin lain:</strong> {preview.pengrajin_list.filter(Boolean).join(", ")}</p>
+                  )}
+                </div>
+              )}
               <p><strong>Spesifikasi:</strong> {preview.spesifikasi}</p>
               {canSeePrice && (
                 <>

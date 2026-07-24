@@ -139,6 +139,7 @@ class BarangCreate(BaseModel):
     harga_jual: float
     catatan: Optional[str] = ""
     gambar_path: Optional[str] = None
+    pengrajin_list: Optional[List[str]] = []  # additional/alternative pengrajin names
 
 class POItemCreate(BaseModel):
     barang_id: str
@@ -379,6 +380,7 @@ async def get_barang(search: Optional[str] = None, user: dict = Depends(get_curr
     if user["role"] == "guest":
         for item in items:
             item.pop("nama_pengrajin", None)
+            item.pop("pengrajin_list", None)
     
     return items
 
@@ -395,8 +397,20 @@ async def get_barang_by_id(barang_id: str, user: dict = Depends(get_current_user
     
     if user["role"] == "guest":
         item.pop("nama_pengrajin", None)
+        item.pop("pengrajin_list", None)
     
     return item
+
+# ===== Helper: aggregate packing (ready) qty per PO+barang from progres =====
+async def _get_packing_map(po_id: Optional[str] = None) -> Dict[str, int]:
+    """Return { f"{po_id}_{barang_id}": packing_total } aggregated from progres collection."""
+    query = {"po_id": po_id} if po_id else {}
+    records = await db.progres.find(query).to_list(5000)
+    m: Dict[str, int] = {}
+    for r in records:
+        k = f"{r.get('po_id','')}_{r.get('item_id','')}"
+        m[k] = m.get(k, 0) + (r.get("packing", 0) or 0)
+    return m
 
 # ===== PO Routes =====
 @api_router.post("/po")
@@ -447,6 +461,13 @@ async def get_po(search: Optional[str] = None, user: dict = Depends(get_current_
     for po in pos:
         po["_id"] = str(po["_id"])
     
+    # Enrich items with qty_ready (packing sum from progres per PO+barang)
+    packing_map = await _get_packing_map()
+    for po in pos:
+        for item in po.get("items", []):
+            k = f"{po['_id']}_{item.get('barang_id','')}"
+            item["qty_ready"] = packing_map.get(k, 0)
+    
     # Hide prices for staff and guest
     if user["role"] in ["staff", "guest"]:
         for po in pos:
@@ -459,6 +480,7 @@ async def get_po(search: Optional[str] = None, user: dict = Depends(get_current_
         for po in pos:
             for item in po.get("items", []):
                 item.pop("nama_pengrajin", None)
+                item.pop("pengrajin_list", None)
     
     return pos
 
@@ -469,6 +491,11 @@ async def get_po_by_id(po_id: str, user: dict = Depends(get_current_user)):
     if not po:
         raise HTTPException(status_code=404, detail="PO not found")
     
+    packing_map = await _get_packing_map(po_id)
+    for item in po.get("items", []):
+        k = f"{po_id}_{item.get('barang_id','')}"
+        item["qty_ready"] = packing_map.get(k, 0)
+    
     if user["role"] in ["staff", "guest"]:
         for item in po.get("items", []):
             item.pop("harga_pengrajin", None)
@@ -477,6 +504,7 @@ async def get_po_by_id(po_id: str, user: dict = Depends(get_current_user)):
     if user["role"] == "guest":
         for item in po.get("items", []):
             item.pop("nama_pengrajin", None)
+            item.pop("pengrajin_list", None)
     
     return po
 
@@ -509,6 +537,7 @@ async def update_po(po_id: str, po: POCreate, user: dict = Depends(get_current_u
             "barang_id": item.barang_id,
             "nama_barang": barang["nama_barang"],
             "nama_pengrajin": barang["nama_pengrajin"],
+            "pengrajin_list": barang.get("pengrajin_list", []) or [],
             "spesifikasi": barang["spesifikasi"],
             "gambar_path": barang.get("gambar_path"),
             "harga_pengrajin": barang["harga_pengrajin"],
@@ -608,18 +637,23 @@ async def create_staffing(staffing: StaffingCreate, user: dict = Depends(get_cur
     if not po:
         raise HTTPException(status_code=404, detail="PO not found")
     
-    # Validate: qty cannot exceed remaining (qty_po - qty_staffed_current)
+    # Validate: qty cannot exceed remaining (qty_po - qty_staffed_current) AND (qty_ready - qty_staffed_current)
     po_items_map = {it.get("barang_id"): it for it in po.get("items", [])}
+    packing_map = await _get_packing_map(staffing.po_id)
     items_dicts = []
     for it in staffing.items:
         po_item = po_items_map.get(it.barang_id)
         if not po_item:
             raise HTTPException(status_code=400, detail=f"Barang {it.barang_id} tidak ada di PO ini")
-        sisa = (po_item.get("qty", 0) or 0) - (po_item.get("qty_staffed", 0) or 0)
+        qty_staffed = po_item.get("qty_staffed", 0) or 0
+        qty_ready = packing_map.get(f"{staffing.po_id}_{it.barang_id}", 0)
+        sisa_po = (po_item.get("qty", 0) or 0) - qty_staffed
+        sisa_ready = qty_ready - qty_staffed
+        sisa = min(sisa_po, sisa_ready)
         if it.qty > sisa:
             raise HTTPException(
                 status_code=400,
-                detail=f"Qty staffing untuk {po_item.get('nama_barang','')} melebihi sisa PO (sisa: {sisa}, diminta: {it.qty})"
+                detail=f"Qty staffing untuk {po_item.get('nama_barang','')} melebihi sisa yang siap (Ready: {qty_ready}, sudah dikirim: {qty_staffed}, sisa: {max(sisa,0)}, diminta: {it.qty})"
             )
         items_dicts.append({
             **it.model_dump(exclude_none=True),
@@ -1048,31 +1082,40 @@ async def export_po_pdf(po_id: str, user: dict = Depends(get_current_user)):
     _brand_header(story, "PURCHASE ORDER", f"No PO: {po['no_po']}  •  Tanggal: {po.get('created_at', '')[:10]}", styles)
 
     body_style = ParagraphStyle('body', parent=styles["BodyText"], fontSize=9, leading=11)
-    header = ["Foto", "Nama Barang", "Spesifikasi", "Pengrajin", "Qty", "Diterima", "Kurang Kirim"]
+    header = ["Foto", "Nama Barang", "Spesifikasi", "Pengrajin", "Qty", "Harga Jual", "Subtotal"]
     data = [header]
+    grand_total = 0
     for item in po.get("items", []):
         img = _fetch_image_flowable(item.get("gambar_path"), 20) or Paragraph("-", body_style)
-        kurang = item["qty"] - (item.get("qty_diterima", 0))
+        qty = item.get("qty", 0) or 0
+        harga = item.get("harga_jual", 0) or 0
+        subtotal = qty * harga
+        grand_total += subtotal
         data.append([
             img,
             Paragraph(item.get("nama_barang", ""), body_style),
             Paragraph(item.get("spesifikasi", ""), body_style),
             Paragraph(item.get("nama_pengrajin", ""), body_style),
-            str(item.get("qty", 0)),
-            str(item.get("qty_diterima", 0)),
-            str(kurang)
+            str(qty),
+            f"Rp {harga:,.0f}".replace(",", "."),
+            f"Rp {subtotal:,.0f}".replace(",", "."),
         ])
+    # Grand total row
+    data.append(["", "", "", "", "", Paragraph("<b>Grand Total</b>", body_style), Paragraph(f"<b>Rp {grand_total:,.0f}</b>".replace(",", "."), body_style)])
 
-    table = Table(data, repeatRows=1, colWidths=[22*mm, 40*mm, 45*mm, 30*mm, 15*mm, 18*mm, 22*mm])
+    table = Table(data, repeatRows=1, colWidths=[22*mm, 38*mm, 42*mm, 26*mm, 12*mm, 25*mm, 27*mm])
     table.setStyle(TableStyle([
-        ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E5E5E5")),
+        ("GRID", (0,0), (-1,-2), 0.5, colors.HexColor("#E5E5E5")),
         ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#8B5A2B")),
         ("TEXTCOLOR", (0,0), (-1,0), colors.white),
         ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
         ("FONTSIZE", (0,0), (-1,-1), 9),
         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#FAFAFA")]),
-        ("ALIGN", (4,1), (6,-1), "CENTER"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-2), [colors.white, colors.HexColor("#FAFAFA")]),
+        ("ALIGN", (4,1), (4,-1), "CENTER"),
+        ("ALIGN", (5,1), (6,-1), "RIGHT"),
+        ("BACKGROUND", (0,-1), (-1,-1), colors.HexColor("#F0E6D6")),
+        ("SPAN", (0,-1), (4,-1)),
     ]))
     story.append(table)
     story.append(Spacer(1, 12))
@@ -1322,24 +1365,28 @@ async def update_staffing(st_id: str, staffing: StaffingCreate, user: dict = Dep
     if not po:
         raise HTTPException(status_code=404, detail="PO not found")
     
-    # Validate first (subtract own old contribution) before mutating PO
+    # Validate first (subtract own old contribution) before mutating PO; also cap by qty_ready
     own_old = {}
     if old and old.get("po_id") == staffing.po_id:
         for item in old.get("items", []):
             own_old[item.get("barang_id")] = own_old.get(item.get("barang_id"), 0) + (item.get("qty", 0) or 0)
     
     po_items_map = {it.get("barang_id"): it for it in po.get("items", [])}
+    packing_map = await _get_packing_map(staffing.po_id)
     items_dicts = []
     for it in staffing.items:
         po_item = po_items_map.get(it.barang_id)
         if not po_item:
             raise HTTPException(status_code=400, detail=f"Barang {it.barang_id} tidak ada di PO ini")
-        current_others = (po_item.get("qty_staffed", 0) or 0) - own_old.get(it.barang_id, 0)
-        sisa = (po_item.get("qty", 0) or 0) - current_others
+        current_others_staffed = (po_item.get("qty_staffed", 0) or 0) - own_old.get(it.barang_id, 0)
+        qty_ready = packing_map.get(f"{staffing.po_id}_{it.barang_id}", 0)
+        sisa_po = (po_item.get("qty", 0) or 0) - current_others_staffed
+        sisa_ready = qty_ready - current_others_staffed
+        sisa = min(sisa_po, sisa_ready)
         if it.qty > sisa:
             raise HTTPException(
                 status_code=400,
-                detail=f"Qty staffing untuk {po_item.get('nama_barang','')} melebihi sisa PO (sisa: {sisa}, diminta: {it.qty})"
+                detail=f"Qty staffing untuk {po_item.get('nama_barang','')} melebihi sisa yang siap (Ready: {qty_ready}, sisa: {max(sisa,0)}, diminta: {it.qty})"
             )
         items_dicts.append({
             **it.model_dump(exclude_none=True),

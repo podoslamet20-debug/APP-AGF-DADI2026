@@ -218,7 +218,9 @@ export default function POPage() {
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {po.items?.map((item, ii) => (
+                {po.items?.map((item, ii) => {
+                  const subtotal = (item.qty || 0) * (item.harga_jual || 0);
+                  return (
                   <div key={ii} className="flex gap-3 p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]">
                     {item.gambar_path ? (
                       <img src={`${API}/files/${item.gambar_path}`} alt={item.nama_barang} className="w-16 h-16 object-cover rounded" />
@@ -228,17 +230,28 @@ export default function POPage() {
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm text-[#1A1A1A] truncate">{item.nama_barang}</p>
                       {canSeeCraftsman && <p className="text-xs text-[#5C5C5C] truncate">{item.nama_pengrajin}</p>}
-                      <div className="mt-1 flex items-center gap-2 text-xs">
+                      <div className="mt-1 flex items-center gap-2 text-xs flex-wrap">
                         <span className="px-1.5 py-0.5 bg-[#8B5A2B] text-white rounded">Qty: {item.qty}</span>
                         <span className="text-[#4CAF50]">Diterima: {item.qty_diterima || 0}</span>
                       </div>
+                      {canSeePrice && (
+                        <p className="text-xs mt-1 text-[#1A1A1A]" data-testid={`po-item-subtotal-${idx}-${ii}`}>Subtotal: <strong>Rp {subtotal.toLocaleString('id-ID')}</strong></p>
+                      )}
                       {(item.qty - (item.qty_diterima || 0)) > 0 && (
                         <p className="text-xs text-[#F44336] mt-1">Kurang: {item.qty - (item.qty_diterima || 0)} pcs</p>
                       )}
                     </div>
                   </div>
-                ))}
+                )})}
               </div>
+              {canSeePrice && (
+                <div className="mt-4 pt-3 border-t border-[#E5E5E5] flex justify-end">
+                  <p className="text-sm text-[#1A1A1A]" data-testid={`po-grand-total-${idx}`}>
+                    <span className="text-[#5C5C5C]">Grand Total: </span>
+                    <strong className="text-[#8B5A2B] text-lg">Rp {(po.items || []).reduce((s, i) => s + (i.qty || 0) * (i.harga_jual || 0), 0).toLocaleString('id-ID')}</strong>
+                  </p>
+                </div>
+              )}
             </Card>
           ))
         )}
@@ -250,7 +263,9 @@ export default function POPage() {
           {detail && (
             <div className="space-y-4">
               {detail.catatan && <p className="text-sm text-[#5C5C5C]">Catatan: {detail.catatan}</p>}
-              {detail.items?.map((item, i) => (
+              {detail.items?.map((item, i) => {
+                const subtotal = (item.qty || 0) * (item.harga_jual || 0);
+                return (
                 <div key={i} className="flex gap-4 p-3 border border-[#E5E5E5] rounded-md">
                   {item.gambar_path && <img src={`${API}/files/${item.gambar_path}`} className="w-24 h-24 object-cover rounded" alt="" />}
                   <div className="flex-1">
@@ -258,10 +273,23 @@ export default function POPage() {
                     {canSeeCraftsman && <p className="text-sm">Pengrajin: {item.nama_pengrajin}</p>}
                     <p className="text-sm text-[#5C5C5C]">{item.spesifikasi}</p>
                     <p className="text-sm mt-1">Qty: <strong>{item.qty}</strong> | Diterima: <strong className="text-[#4CAF50]">{item.qty_diterima || 0}</strong></p>
-                    {canSeePrice && <p className="text-sm text-[#5C5C5C]">Harga: Rp {item.harga_jual?.toLocaleString('id-ID')}</p>}
+                    {canSeePrice && (
+                      <>
+                        <p className="text-sm text-[#5C5C5C]">Harga Jual: Rp {item.harga_jual?.toLocaleString('id-ID')}</p>
+                        <p className="text-sm text-[#1A1A1A]">Subtotal ({item.qty} × Rp {item.harga_jual?.toLocaleString('id-ID')}): <strong className="text-[#8B5A2B]">Rp {subtotal.toLocaleString('id-ID')}</strong></p>
+                      </>
+                    )}
                   </div>
                 </div>
-              ))}
+              )})}
+              {canSeePrice && (
+                <div className="pt-3 border-t border-[#E5E5E5] flex justify-between items-center bg-[#F0E6D6] p-3 rounded-md">
+                  <span className="font-bold text-[#1A1A1A]">Grand Total PO:</span>
+                  <span className="font-bold text-xl text-[#8B5A2B]" data-testid="po-detail-grand-total">
+                    Rp {(detail.items || []).reduce((s, i) => s + (i.qty || 0) * (i.harga_jual || 0), 0).toLocaleString('id-ID')}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </DialogContent>

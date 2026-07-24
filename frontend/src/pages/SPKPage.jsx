@@ -79,6 +79,7 @@ export default function SPKPage() {
       nama_barang: b.nama_barang,
       spesifikasi: b.spesifikasi,
       nama_pengrajin: b.nama_pengrajin,
+      pengrajin_list: b.pengrajin_list || [],
       gambar_path: b.gambar_path,
       harga: b.harga_pengrajin || 0,
     };
@@ -173,7 +174,12 @@ export default function SPKPage() {
                     </div>
                   </div>
                   <div className="space-y-2">
-                    {form.items.map((item, idx) => (
+                    {form.items.map((item, idx) => {
+                      const pengrajinOptions = [item.nama_pengrajin, ...(item.pengrajin_list || [])].filter(Boolean);
+                      // Dedupe while preserving order
+                      const seen = new Set();
+                      const uniqueOptions = pengrajinOptions.filter(p => { if (seen.has(p)) return false; seen.add(p); return true; });
+                      return (
                       <div key={idx} className="p-3 border border-[#E5E5E5] rounded-md space-y-2">
                         <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
                           <div className="md:col-span-6">
@@ -197,9 +203,31 @@ export default function SPKPage() {
                             <Button variant="ghost" size="icon" onClick={() => removeItem(idx)} className="text-[#F44336]"><Trash2 className="w-4 h-4" /></Button>
                           </div>
                         </div>
-                        <Input type="number" placeholder="Harga" value={item.harga} onChange={(e) => updateItem(idx, "harga", parseFloat(e.target.value) || 0)} data-testid={`spk-harga-${idx}`} />
+                        <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
+                          <div className="md:col-span-5">
+                            <Label className="text-xs">Pengrajin</Label>
+                            {uniqueOptions.length > 1 ? (
+                              <Select value={item.nama_pengrajin || ""} onValueChange={(v) => updateItem(idx, "nama_pengrajin", v)}>
+                                <SelectTrigger data-testid={`spk-pengrajin-select-${idx}`}><SelectValue placeholder="Pilih pengrajin" /></SelectTrigger>
+                                <SelectContent>
+                                  {uniqueOptions.map((p, pi) => <SelectItem key={pi} value={p}>{p}</SelectItem>)}
+                                </SelectContent>
+                              </Select>
+                            ) : (
+                              <Input value={item.nama_pengrajin || ""} onChange={(e) => updateItem(idx, "nama_pengrajin", e.target.value)} placeholder="Nama pengrajin" data-testid={`spk-pengrajin-input-${idx}`} />
+                            )}
+                          </div>
+                          <div className="md:col-span-4">
+                            <Label className="text-xs">Harga</Label>
+                            <Input type="number" placeholder="Harga" value={item.harga} onChange={(e) => updateItem(idx, "harga", parseFloat(e.target.value) || 0)} data-testid={`spk-harga-${idx}`} />
+                          </div>
+                          <div className="md:col-span-3">
+                            <Label className="text-xs">Catatan Item</Label>
+                            <Input placeholder="Note (opsional)" value={item.catatan || ""} onChange={(e) => updateItem(idx, "catatan", e.target.value)} data-testid={`spk-catatan-${idx}`} />
+                          </div>
+                        </div>
                       </div>
-                    ))}
+                    )})}
                   </div>
                 </div>
                 <div>
@@ -269,10 +297,11 @@ export default function SPKPage() {
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm truncate">{item.nama_barang}</p>
                       {canSeeCraftsman && <p className="text-xs text-[#5C5C5C] truncate">{item.nama_pengrajin}</p>}
-                      <div className="flex gap-2 items-center mt-1">
+                      <div className="flex gap-2 items-center mt-1 flex-wrap">
                         <span className="text-xs px-1.5 py-0.5 bg-[#8B5A2B] text-white rounded">Qty: {item.qty}</span>
                         {canSeePrice && item.harga > 0 && <span className="text-xs text-[#4CAF50]">Rp {item.harga?.toLocaleString('id-ID')}</span>}
                       </div>
+                      {item.catatan && <p className="text-xs text-[#5C5C5C] italic mt-1 truncate">📝 {item.catatan}</p>}
                     </div>
                   </div>
                 ))}
@@ -304,6 +333,7 @@ export default function SPKPage() {
                     <p className="text-sm text-[#5C5C5C]">{item.spesifikasi}</p>
                     <p className="text-sm mt-1">No PO: <strong>{item.no_po}</strong> | Qty: <strong>{item.qty}</strong></p>
                     {canSeePrice && item.harga > 0 && <p className="text-sm text-[#4CAF50]">Rp {item.harga?.toLocaleString('id-ID')}</p>}
+                    {item.catatan && <p className="text-sm text-[#5C5C5C] italic mt-1">📝 {item.catatan}</p>}
                   </div>
                 </div>
               ))}
