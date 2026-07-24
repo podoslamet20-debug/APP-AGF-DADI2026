@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, Truck, Package, Search, Trash2, Edit, Eye, Download } from "lucide-react";
+import { Plus, Truck, Package, Search, Trash2, Edit, Eye, Download, Printer } from "lucide-react";
 
 export default function Staffing() {
   const { API, canEditPartial, canSeeCraftsman } = useAuth();
@@ -40,12 +40,19 @@ export default function Staffing() {
     const po = pos.find(p => (p._id || p.id) === poId);
     if (!po) return;
     setSelectedPO(po);
-    setForm({ ...form, po_id: poId, items: po.items.map(i => ({ ...i, qty: 0 })) });
+    setForm({ ...form, po_id: poId, items: po.items.map(i => ({ ...i, qty: 0, _selected: true, _max_qty: (i.qty || 0) })) });
+  };
+
+  const toggleItem = (idx) => {
+    const items = [...form.items];
+    items[idx]._selected = !items[idx]._selected;
+    setForm({ ...form, items });
   };
 
   const updateQty = (idx, qty) => {
     const items = [...form.items];
-    items[idx].qty = parseInt(qty) || 0;
+    const max = items[idx]._max_qty || items[idx].qty || 0;
+    items[idx].qty = Math.min(Math.max(parseInt(qty) || 0, 0), max);
     setForm({ ...form, items });
   };
 
@@ -54,12 +61,18 @@ export default function Staffing() {
       toast.error("Isi semua field wajib");
       return;
     }
+    const filteredItems = form.items.filter(i => i._selected !== false && (i.qty || 0) > 0).map(({_selected, _max_qty, ...rest}) => rest);
+    if (filteredItems.length === 0) {
+      toast.error("Pilih minimal 1 barang dengan qty > 0");
+      return;
+    }
+    const payload = { ...form, items: filteredItems };
     try {
       if (editingId) {
-        await axios.put(`${API}/staffing/${editingId}`, form);
+        await axios.put(`${API}/staffing/${editingId}`, payload);
         toast.success("Staffing berhasil diupdate");
       } else {
-        await axios.post(`${API}/staffing`, form);
+        await axios.post(`${API}/staffing`, payload);
         toast.success("Staffing berhasil dicatat");
       }
       setOpen(false);
@@ -88,13 +101,21 @@ export default function Staffing() {
   };
 
   const downloadPDF = (id) => window.open(`${API}/export/staffing/${id}/pdf`, '_blank');
+  const downloadAllPDF = () => window.open(`${API}/export/staffing/pdf`, '_blank');
+  const downloadExcel = () => window.open(`${API}/export/staffing/excel`, '_blank');
+  const printPage = () => window.print();
 
   return (
     <div className="space-y-6" data-testid="staffing-page">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 print:hidden">
         <div>
           <h1 className="text-3xl font-bold text-[#1A1A1A] tracking-tight" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>Staffing</h1>
           <p className="text-[#5C5C5C] mt-1">Catat barang keluar/dikirim ke customer</p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" onClick={downloadAllPDF} data-testid="export-pdf-staffing"><Download className="w-4 h-4 mr-2" /> PDF</Button>
+          <Button variant="outline" onClick={downloadExcel} data-testid="export-excel-staffing"><Download className="w-4 h-4 mr-2" /> Excel</Button>
+          <Button variant="outline" onClick={printPage} data-testid="print-staffing"><Printer className="w-4 h-4 mr-2" /> Print</Button>
         </div>
         {canEditPartial && (
           <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditingId(null); setForm({ po_id: "", tanggal_keluar: "", items: [] }); setSelectedPO(null); }}}>
@@ -119,19 +140,26 @@ export default function Staffing() {
                 </div>
                 {selectedPO && (
                   <div>
-                    <Label>Barang dari PO</Label>
+                    <Label>Pilih Barang yang Dikirim <span className="text-xs text-[#5C5C5C]">(centang untuk memilih, qty max sesuai PO)</span></Label>
                     <div className="space-y-2 mt-2">
                       {form.items.map((item, idx) => (
-                        <div key={idx} className="p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5] flex gap-3">
+                        <div key={idx} className={`p-3 rounded-md border flex gap-3 ${item._selected !== false ? 'bg-[#FAFAFA] border-[#E5E5E5]' : 'bg-gray-100 border-gray-200 opacity-60'}`}>
+                          <input
+                            type="checkbox"
+                            checked={item._selected !== false}
+                            onChange={() => toggleItem(idx)}
+                            data-testid={`staffing-select-${idx}`}
+                            className="mt-2 w-4 h-4 accent-[#8B5A2B]"
+                          />
                           {item.gambar_path && <img src={`${API}/files/${item.gambar_path}`} className="w-14 h-14 object-cover rounded" alt="" />}
                           <div className="flex-1">
                             <p className="font-medium text-sm">{item.nama_barang}</p>
                             {canSeeCraftsman && <p className="text-xs text-[#5C5C5C]">{item.nama_pengrajin}</p>}
-                            <p className="text-xs text-[#5C5C5C]">Total PO: {item.qty}</p>
+                            <p className="text-xs text-[#5C5C5C]">Total PO: {item._max_qty || item.qty || 0}</p>
                           </div>
                           <div className="w-24">
-                            <Label className="text-xs">Qty Keluar</Label>
-                            <Input type="number" data-testid={`staffing-qty-${idx}`} value={item.qty || 0} onChange={(e) => updateQty(idx, e.target.value)} />
+                            <Label className="text-xs">Qty Keluar (max {item._max_qty || item.qty || 0})</Label>
+                            <Input type="number" min={0} max={item._max_qty || item.qty || 0} data-testid={`staffing-qty-${idx}`} value={item.qty || 0} onChange={(e) => updateQty(idx, e.target.value)} disabled={item._selected === false} />
                           </div>
                         </div>
                       ))}

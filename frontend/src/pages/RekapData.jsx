@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Download, Package } from "lucide-react";
+import { Download, Package, Printer } from "lucide-react";
 import * as XLSX from "xlsx";
 import { saveAs } from "file-saver";
 
@@ -18,19 +18,21 @@ export default function RekapData() {
   const [rekapBarang, setRekapBarang] = useState([]);
   const [rekapProgres, setRekapProgres] = useState([]);
   const [staffing, setStaffing] = useState([]);
+  const [staffingSummary, setStaffingSummary] = useState([]);
   const [poList, setPoList] = useState([]);
   const [filterTanggal, setFilterTanggal] = useState("");
   const [filterNoPO, setFilterNoPO] = useState("all");
 
   const load = async () => {
     try {
-      const [poRes, pgRes, brRes, prRes, stRes, poListRes] = await Promise.all([
+      const [poRes, pgRes, brRes, prRes, stRes, poListRes, sumRes] = await Promise.all([
         axios.get(`${API}/rekap/all-po${filterNoPO !== "all" ? `?no_po=${filterNoPO}` : ""}`),
         !isGuest ? axios.get(`${API}/rekap/per-pengrajin`) : Promise.resolve({ data: [] }),
         axios.get(`${API}/rekap/per-barang`),
         axios.get(`${API}/rekap/progres`),
         axios.get(`${API}/staffing${filterTanggal ? `?tanggal=${filterTanggal}` : ""}`),
         axios.get(`${API}/po`),
+        axios.get(`${API}/rekap/staffing-summary${filterNoPO !== "all" ? `?no_po=${filterNoPO}` : ""}`),
       ]);
       setRekapPO(poRes.data);
       setRekapPengrajin(pgRes.data);
@@ -38,6 +40,7 @@ export default function RekapData() {
       setRekapProgres(prRes.data);
       setStaffing(stRes.data);
       setPoList(poListRes.data);
+      setStaffingSummary(sumRes.data);
     } catch (e) { console.error(e); }
   };
 
@@ -66,18 +69,13 @@ export default function RekapData() {
   };
 
   const exportStaffing = (format) => {
-    const data = [];
-    staffing.forEach(st => {
-      st.items?.forEach(item => {
-        data.push({
-          "No PO": st.no_po,
-          "Tanggal": st.tanggal_keluar,
-          "Nama Barang": item.nama_barang,
-          ...(canSeeCraftsman && { "Pengrajin": item.nama_pengrajin }),
-          "Qty": item.qty,
-        });
-      });
-    });
+    const data = staffingSummary.map(r => ({
+      "No PO": r.no_po,
+      "Nama Barang": r.nama_barang,
+      "Qty PO": r.qty_po,
+      "Qty Staffing": r.qty_staffing,
+      "Kurang Kirim": r.kurang_kirim,
+    }));
     exportData(data, "rekap-staffing", format);
   };
 
@@ -91,6 +89,8 @@ export default function RekapData() {
     }));
     exportData(data, "rekap-per-barang", format);
   };
+
+  const printPage = () => window.print();
 
   const exportProgres = (format) => {
     const data = rekapProgres.map(r => ({
@@ -124,9 +124,16 @@ export default function RekapData() {
 
   return (
     <div className="space-y-6" data-testid="rekap-page">
-      <div>
-        <h1 className="text-3xl font-bold text-[#1A1A1A] tracking-tight" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>Rekap Data</h1>
-        <p className="text-[#5C5C5C] mt-1">Laporan komprehensif untuk semua data</p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 print:hidden">
+        <div>
+          <h1 className="text-3xl font-bold text-[#1A1A1A] tracking-tight" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>Rekap Data</h1>
+          <p className="text-[#5C5C5C] mt-1">Laporan komprehensif untuk semua data</p>
+        </div>
+        <Button variant="outline" onClick={printPage} data-testid="print-rekap"><Printer className="w-4 h-4 mr-2" /> Print</Button>
+      </div>
+
+      <div className="hidden print:block print-header mb-4">
+        <h1 className="text-2xl font-bold">AGFDATA - Rekap Data</h1>
       </div>
 
       <Tabs defaultValue="po" className="w-full">
@@ -317,42 +324,39 @@ export default function RekapData() {
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
               <h2 className="text-xl font-bold text-[#1A1A1A]" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>Rekap Staffing</h2>
               <div className="flex gap-2 flex-wrap items-end">
-                <div>
-                  <Label className="text-xs">Filter Tanggal</Label>
-                  <Input type="date" value={filterTanggal} onChange={(e) => setFilterTanggal(e.target.value)} data-testid="filter-tanggal-staffing" />
-                </div>
                 <Button variant="outline" size="sm" onClick={() => exportStaffing("csv")} data-testid="export-staffing-csv"><Download className="w-3 h-3 mr-1" /> CSV</Button>
                 <Button variant="outline" size="sm" onClick={() => exportStaffing("xlsx")} data-testid="export-staffing-xlsx"><Download className="w-3 h-3 mr-1" /> Excel</Button>
               </div>
             </div>
+            <p className="text-xs text-[#5C5C5C] mb-3">Total Qty PO dan Qty Kurang Kirim (PO - Staffing)</p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-[#F0E6D6]">
                   <tr>
                     <th className="p-2 text-left">Foto</th>
                     <th className="p-2 text-left">No PO</th>
-                    <th className="p-2 text-left">Tanggal</th>
                     <th className="p-2 text-left">Barang</th>
-                    {canSeeCraftsman && <th className="p-2 text-left">Pengrajin</th>}
-                    <th className="p-2 text-right">Qty</th>
+                    <th className="p-2 text-right">Qty PO</th>
+                    <th className="p-2 text-right">Qty Staffing</th>
+                    <th className="p-2 text-right">Kurang Kirim</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {staffing.flatMap((st, si) => (st.items || []).map((item, ii) => (
-                    <tr key={`${si}-${ii}`} className="border-b border-[#E5E5E5]" data-testid={`rekap-staffing-row-${si}-${ii}`}>
+                  {staffingSummary.map((r, i) => (
+                    <tr key={i} className="border-b border-[#E5E5E5]" data-testid={`rekap-staffing-row-${i}`}>
                       <td className="p-2">
-                        {item.gambar_path ? <img src={`${API}/files/${item.gambar_path}`} className="w-10 h-10 object-cover rounded" alt="" /> : <div className="w-10 h-10 bg-[#F0E6D6] rounded flex items-center justify-center"><Package className="w-4 h-4 text-[#8B5A2B]" /></div>}
+                        {r.gambar_path ? <img src={`${API}/files/${r.gambar_path}`} className="w-10 h-10 object-cover rounded" alt="" /> : <div className="w-10 h-10 bg-[#F0E6D6] rounded flex items-center justify-center"><Package className="w-4 h-4 text-[#8B5A2B]" /></div>}
                       </td>
-                      <td className="p-2">{st.no_po}</td>
-                      <td className="p-2">{st.tanggal_keluar}</td>
-                      <td className="p-2">{item.nama_barang}</td>
-                      {canSeeCraftsman && <td className="p-2">{item.nama_pengrajin}</td>}
-                      <td className="p-2 text-right font-medium">{item.qty}</td>
+                      <td className="p-2">{r.no_po}</td>
+                      <td className="p-2 font-medium">{r.nama_barang}</td>
+                      <td className="p-2 text-right">{r.qty_po}</td>
+                      <td className="p-2 text-right">{r.qty_staffing}</td>
+                      <td className="p-2 text-right"><span className={`font-medium ${r.kurang_kirim > 0 ? 'text-[#F44336]' : 'text-[#4CAF50]'}`}>{r.kurang_kirim}</span></td>
                     </tr>
-                  )))}
+                  ))}
                 </tbody>
               </table>
-              {staffing.length === 0 && <p className="text-center text-[#5C5C5C] py-8">Belum ada data</p>}
+              {staffingSummary.length === 0 && <p className="text-center text-[#5C5C5C] py-8">Belum ada data</p>}
             </div>
           </Card>
         </TabsContent>

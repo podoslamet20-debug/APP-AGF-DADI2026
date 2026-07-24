@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, PackageOpen, Download, Package, Search, Trash2, Edit, Eye } from "lucide-react";
+import { Plus, PackageOpen, Download, Package, Search, Trash2, Edit, Eye, Printer } from "lucide-react";
 
 export default function BarangMasuk() {
   const { API, canEditPartial, canSeeCraftsman } = useAuth();
@@ -27,7 +27,12 @@ export default function BarangMasuk() {
       const [bmRes, poRes] = await Promise.all([axios.get(`${API}/barang-masuk`), axios.get(`${API}/po`)]);
       let bmData = bmRes.data;
       if (search) {
-        bmData = bmData.filter(bm => bm.no_po?.toLowerCase().includes(search.toLowerCase()) || bm.penerima?.toLowerCase().includes(search.toLowerCase()));
+        const s = search.toLowerCase();
+        bmData = bmData.filter(bm =>
+          bm.no_po?.toLowerCase().includes(s) ||
+          bm.penerima?.toLowerCase().includes(s) ||
+          bm.items?.some(i => (i.nama_barang || "").toLowerCase().includes(s) || (i.nama_pengrajin || "").toLowerCase().includes(s))
+        );
       }
       setItems(bmData);
       setPos(poRes.data);
@@ -43,7 +48,7 @@ export default function BarangMasuk() {
     setForm({
       ...form,
       po_id: poId,
-      items: po.items.map(i => ({ ...i, qty_diterima: 0, _selected: true }))
+      items: po.items.map(i => ({ ...i, qty_diterima: 0, _selected: true, _original_qty_diterima: i.qty_diterima || 0, _sisa: (i.qty || 0) - (i.qty_diterima || 0) }))
     });
   };
 
@@ -55,7 +60,9 @@ export default function BarangMasuk() {
 
   const updateQty = (idx, qty) => {
     const items = [...form.items];
-    items[idx].qty_diterima = parseInt(qty) || 0;
+    const maxQty = (items[idx].qty || 0) - (items[idx]._original_qty_diterima || 0);
+    const clamped = Math.min(Math.max(parseInt(qty) || 0, 0), maxQty);
+    items[idx].qty_diterima = clamped;
     setForm({ ...form, items });
   };
 
@@ -106,9 +113,17 @@ export default function BarangMasuk() {
 
   const downloadPDF = (id) => window.open(`${API}/export/barang-masuk/${id}/pdf`, '_blank');
 
-  const downloadExcel = () => {
-    window.open(`${API}/export/barang-masuk/excel`, '_blank');
+  const downloadAllPDF = () => {
+    const url = search ? `${API}/export/barang-masuk/pdf?search=${encodeURIComponent(search)}` : `${API}/export/barang-masuk/pdf`;
+    window.open(url, '_blank');
   };
+
+  const downloadExcel = () => {
+    const url = search ? `${API}/export/barang-masuk/excel?search=${encodeURIComponent(search)}` : `${API}/export/barang-masuk/excel`;
+    window.open(url, '_blank');
+  };
+
+  const printPage = () => window.print();
 
   return (
     <div className="space-y-6" data-testid="barang-masuk-page">
@@ -117,8 +132,10 @@ export default function BarangMasuk() {
           <h1 className="text-3xl font-bold text-[#1A1A1A] tracking-tight" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>Barang Masuk</h1>
           <p className="text-[#5C5C5C] mt-1">Catat barang yang masuk dari pengrajin</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={downloadExcel} data-testid="export-excel-bm"><Download className="w-4 h-4 mr-2" /> Export Excel</Button>
+        <div className="flex gap-2 flex-wrap print:hidden">
+          <Button variant="outline" onClick={downloadAllPDF} data-testid="export-pdf-bm"><Download className="w-4 h-4 mr-2" /> PDF</Button>
+          <Button variant="outline" onClick={downloadExcel} data-testid="export-excel-bm"><Download className="w-4 h-4 mr-2" /> Excel</Button>
+          <Button variant="outline" onClick={printPage} data-testid="print-bm"><Printer className="w-4 h-4 mr-2" /> Print</Button>
           {canEditPartial && (
             <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditingId(null); setForm({ po_id: "", tanggal_masuk: "", penerima: "", items: [] }); setSelectedPO(null); }}}>
               <DialogTrigger asChild>
@@ -182,10 +199,10 @@ export default function BarangMasuk() {
         </div>
       </div>
 
-      <Card className="p-4 border border-[#E5E5E5]">
+      <Card className="p-4 border border-[#E5E5E5] print:hidden">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#5C5C5C]" />
-          <Input placeholder="Cari No PO atau Penerima..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" data-testid="search-bm-input" />
+          <Input placeholder="Cari No PO, Penerima, Nama Barang, atau Pengrajin..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" data-testid="search-bm-input" />
         </div>
       </Card>
 

@@ -236,6 +236,15 @@ async def startup_event():
             f.write(f"## Guest\n- Email: tamu@agfdata.com\n- Password: tamu123\n- Role: guest\n\n")
             f.write("## Endpoints\n- POST /api/auth/login\n- GET /api/auth/me\n- POST /api/auth/logout\n")
         
+        # Migration: clean legacy progres records with empty po_id
+        try:
+            legacy = await db.progres.count_documents({"po_id": ""})
+            if legacy > 0:
+                await db.progres.delete_many({"po_id": ""})
+                logger.info(f"Migrated: removed {legacy} legacy progres records with empty po_id")
+        except Exception as e:
+            logger.warning(f"Migration warning: {e}")
+        
         logger.info("Startup completed successfully")
     except Exception as e:
         logger.error(f"Startup error: {e}")
@@ -1089,34 +1098,6 @@ async def export_staffing_pdf(st_id: str, user: dict = Depends(get_current_user)
     return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=Staffing-{st['no_po']}.pdf"})
 
 
-@api_router.get("/export/barang-masuk/excel")
-async def export_barang_masuk_excel(user: dict = Depends(get_current_user)):
-    items = await db.barang_masuk.find({}).to_list(1000)
-    
-    data = []
-    for bm in items:
-        for item in bm.get("items", []):
-            data.append({
-                "No PO": bm.get("no_po", ""),
-                "Tanggal Masuk": bm.get("tanggal_masuk", ""),
-                "Penerima": bm.get("penerima", ""),
-                "Nama Barang": item.get("nama_barang", ""),
-                "Qty Diterima": item.get("qty_diterima", 0)
-            })
-    
-    if not data:
-        data = [{"No PO": "", "Tanggal Masuk": "", "Penerima": "", "Nama Barang": "", "Qty Diterima": 0}]
-    df = pd.DataFrame(data)
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='Barang Masuk')
-    buffer.seek(0)
-    
-    return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={
-        "Content-Disposition": "attachment; filename=barang-masuk.xlsx"
-    })
-
-
 # ===== Edit / Delete Endpoints =====
 @api_router.put("/barang/{barang_id}")
 async def update_barang(barang_id: str, barang: BarangCreate, user: dict = Depends(get_current_user)):
@@ -1370,6 +1351,157 @@ async def get_rekap_progres(user: dict = Depends(get_current_user)):
         for r in result:
             r.pop("nama_pengrajin", None)
     return result
+
+
+@api_router.get("/rekap/staffing-summary")
+async def get_rekap_staffing_summary(no_po: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """Rekap staffing per PO+barang: qty_po vs qty_staffing dengan kurang_kirim."""
+    query = {"no_po": no_po} if no_po else {}
+    pos = await db.po.find(query).to_list(1000)
+    staffing = await db.staffing.find({}).to_list(1000)
+    for p in pos: p["_id"] = str(p["_id"])
+    for s in staffing: s["_id"] = str(s["_id"])
+    result = []
+    for po in pos:
+        for item in po.get("items", []):
+            staffing_qty = sum(
+                si.get("qty", 0) for s in staffing if s.get("po_id") == po["_id"]
+                for si in s.get("items", []) if si.get("barang_id") == item.get("barang_id")
+            )
+            result.append({
+                "no_po": po["no_po"],
+                "nama_barang": item.get("nama_barang", ""),
+                "gambar_path": item.get("gambar_path"),
+                "qty_po": item.get("qty", 0),
+                "qty_staffing": staffing_qty,
+                "kurang_kirim": item.get("qty", 0) - staffing_qty,
+            })
+    return result
+
+
+async def _excel_with_images(rows, sheet_name, headers, keys, user):
+    """Generate Excel with photo column."""
+    buffer = BytesIO()
+    workbook = xlsxwriter.Workbook(buffer, {'in_memory': True})
+    ws = workbook.add_worksheet(sheet_name)
+    header_fmt = workbook.add_format({'bold': True, 'bg_color': '#8B5A2B', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+    cell_fmt = workbook.add_format({'valign': 'vcenter', 'border': 1})
+    ws.set_column(0, 0, 14)
+    for i in range(len(headers)):
+        ws.set_column(i+1, i+1, 20)
+    ws.set_row(0, 25)
+    ws.write(0, 0, "Foto", header_fmt)
+    for i, h in enumerate(headers):
+        ws.write(0, i+1, h, header_fmt)
+    for r_idx, row in enumerate(rows, start=1):
+        ws.set_row(r_idx, 60)
+        gp = row.get("gambar_path")
+        if gp:
+            try:
+                data, _ = get_object(gp)
+                pil = PILImage.open(BytesIO(data))
+                pil.thumbnail((80, 80))
+                out = BytesIO()
+                pil.save(out, format='PNG')
+                out.seek(0)
+                ws.insert_image(r_idx, 0, "img.png", {'image_data': out, 'x_offset': 5, 'y_offset': 5})
+            except Exception:
+                ws.write(r_idx, 0, "-", cell_fmt)
+        else:
+            ws.write(r_idx, 0, "-", cell_fmt)
+        for i, k in enumerate(keys):
+            val = row.get(k, "")
+            if user.get("role") == "guest" and k == "nama_pengrajin":
+                val = ""
+            ws.write(r_idx, i+1, val, cell_fmt)
+    workbook.close()
+    buffer.seek(0)
+    return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename={sheet_name.lower().replace(' ','-')}.xlsx"})
+
+
+@api_router.get("/export/barang-masuk/pdf")
+async def export_all_bm_pdf(search: Optional[str] = None, user: dict = Depends(get_current_user)):
+    items = await db.barang_masuk.find({}).to_list(1000)
+    if search:
+        s = search.lower()
+        items = [bm for bm in items if s in (bm.get("no_po","").lower()+bm.get("penerima","").lower()) or any(s in (i.get("nama_barang","")+i.get("nama_pengrajin","")).lower() for i in bm.get("items",[]))]
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=8*mm, rightMargin=8*mm)
+    story = []
+    styles = getSampleStyleSheet()
+    _brand_header(story, "REKAP BARANG MASUK", f"Filter: {search or 'Semua'}", styles)
+    body_style = ParagraphStyle('body', parent=styles["BodyText"], fontSize=8, leading=10)
+    data = [["Foto", "No PO", "Tanggal", "Penerima", "Barang", "Pengrajin", "Qty"]]
+    for bm in items:
+        for item in bm.get("items", []):
+            img = _fetch_image_flowable(item.get("gambar_path"), 16) or Paragraph("-", body_style)
+            data.append([img, bm.get("no_po",""), bm.get("tanggal_masuk",""), bm.get("penerima",""), Paragraph(item.get("nama_barang",""), body_style), Paragraph(item.get("nama_pengrajin",""), body_style), str(item.get("qty_diterima",0))])
+    table = Table(data, repeatRows=1, colWidths=[18*mm, 24*mm, 22*mm, 26*mm, 40*mm, 30*mm, 14*mm])
+    table.setStyle(TableStyle([("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E5E5E5")), ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#8B5A2B")), ("TEXTCOLOR", (0,0), (-1,0), colors.white), ("FONTSIZE", (0,0), (-1,-1), 8), ("VALIGN", (0,0), (-1,-1), "MIDDLE")]))
+    story.append(table)
+    doc.build(story)
+    buffer.seek(0)
+    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": "attachment; filename=barang-masuk-all.pdf"})
+
+
+@api_router.get("/export/staffing/pdf")
+async def export_all_staffing_pdf(user: dict = Depends(get_current_user)):
+    items = await db.staffing.find({}).to_list(1000)
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=8*mm, rightMargin=8*mm)
+    story = []
+    styles = getSampleStyleSheet()
+    _brand_header(story, "REKAP STAFFING", "Semua data staffing", styles)
+    body_style = ParagraphStyle('body', parent=styles["BodyText"], fontSize=8, leading=10)
+    data = [["Foto", "No PO", "Tanggal", "Barang", "Pengrajin", "Qty"]]
+    for st in items:
+        for item in st.get("items", []):
+            img = _fetch_image_flowable(item.get("gambar_path"), 16) or Paragraph("-", body_style)
+            data.append([img, st.get("no_po",""), st.get("tanggal_keluar",""), Paragraph(item.get("nama_barang",""), body_style), Paragraph(item.get("nama_pengrajin",""), body_style), str(item.get("qty",0))])
+    table = Table(data, repeatRows=1, colWidths=[18*mm, 28*mm, 24*mm, 50*mm, 34*mm, 14*mm])
+    table.setStyle(TableStyle([("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E5E5E5")), ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#8B5A2B")), ("TEXTCOLOR", (0,0), (-1,0), colors.white), ("VALIGN", (0,0), (-1,-1), "MIDDLE")]))
+    story.append(table)
+    doc.build(story)
+    buffer.seek(0)
+    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": "attachment; filename=staffing-all.pdf"})
+
+
+@api_router.get("/export/staffing/excel")
+async def export_staffing_excel(user: dict = Depends(get_current_user)):
+    items = await db.staffing.find({}).to_list(1000)
+    rows = []
+    for st in items:
+        for item in st.get("items", []):
+            rows.append({
+                "no_po": st.get("no_po",""),
+                "tanggal_keluar": st.get("tanggal_keluar",""),
+                "nama_barang": item.get("nama_barang",""),
+                "nama_pengrajin": item.get("nama_pengrajin",""),
+                "qty": item.get("qty",0),
+                "gambar_path": item.get("gambar_path"),
+            })
+    return await _excel_with_images(rows, "Staffing", ["No PO", "Tanggal", "Barang", "Pengrajin", "Qty"], ["no_po","tanggal_keluar","nama_barang","nama_pengrajin","qty"], user)
+
+
+@api_router.get("/export/barang-masuk/excel")
+async def export_barang_masuk_excel_v2(search: Optional[str] = None, user: dict = Depends(get_current_user)):
+    items = await db.barang_masuk.find({}).to_list(1000)
+    if search:
+        s = search.lower()
+        items = [bm for bm in items if s in (bm.get("no_po","").lower()+bm.get("penerima","").lower()) or any(s in (i.get("nama_barang","")+i.get("nama_pengrajin","")).lower() for i in bm.get("items",[]))]
+    rows = []
+    for bm in items:
+        for item in bm.get("items", []):
+            rows.append({
+                "no_po": bm.get("no_po", ""),
+                "tanggal_masuk": bm.get("tanggal_masuk", ""),
+                "penerima": bm.get("penerima", ""),
+                "nama_barang": item.get("nama_barang", ""),
+                "nama_pengrajin": item.get("nama_pengrajin", ""),
+                "qty_diterima": item.get("qty_diterima", 0),
+                "gambar_path": item.get("gambar_path"),
+            })
+    return await _excel_with_images(rows, "Barang Masuk", ["No PO", "Tanggal", "Penerima", "Barang", "Pengrajin", "Qty"], ["no_po","tanggal_masuk","penerima","nama_barang","nama_pengrajin","qty_diterima"], user)
 
 
 @api_router.get("/rekap/staffing-detail")

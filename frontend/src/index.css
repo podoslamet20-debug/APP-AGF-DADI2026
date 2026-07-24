@@ -79,14 +79,15 @@ code {
 /* ========== Print Styles ========== */
 @media print {
     @page {
-        size: A4;
-        margin: 12mm;
+        size: A4 landscape;
+        margin: 8mm;
     }
     body {
         background: white !important;
         color: black !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
+        font-size: 10px;
     }
     aside, header, nav, .print\:hidden, button {
         display: none !important;
@@ -97,16 +98,28 @@ code {
     .print-header {
         display: block !important;
         border-bottom: 2px solid #8B5A2B;
-        padding-bottom: 8px;
-        margin-bottom: 12px;
+        padding-bottom: 6px;
+        margin-bottom: 10px;
     }
     [role="tablist"] {
         display: none !important;
     }
+    /* Photos display full without crop, small size */
+    img {
+        max-width: 50px !important;
+        max-height: 50px !important;
+        object-fit: contain !important;
+        object-position: center !important;
+    }
+    /* Compact table with smaller text */
     table {
         page-break-inside: auto;
         border-collapse: collapse;
-        width: 100%;
+        width: 100% !important;
+        font-size: 9px !important;
+    }
+    table th, table td {
+        padding: 3px 4px !important;
     }
     tr {
         page-break-inside: avoid;
@@ -119,6 +132,13 @@ code {
         background: #8B5A2B !important;
         color: white !important;
         -webkit-print-color-adjust: exact;
+    }
+    /* Card-style progres items - compact for print */
+    [data-testid^="progres-po-"] {
+        page-break-inside: auto;
+    }
+    [data-testid^="progres-item-"] {
+        page-break-inside: avoid;
     }
     .shadow, .shadow-md, .shadow-sm {
         box-shadow: none !important;

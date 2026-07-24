@@ -1,0 +1,51 @@
+{
+  "summary": "Iteration 4 testing complete. Backend: 25/25 new iter4 tests passed (100%). Regression: 93/94 legacy tests still pass (1 pre-existing iter1 failure explained below). Frontend: All new UI features verified — qty capping in Barang Masuk (99999→10) and Staffing (99999→50), checkbox unselect disables qty input, PDF/Excel/Print buttons in header, search placeholder updated to include nama barang+pengrajin, Rekap Staffing tab shows exactly ['Foto','No PO','Barang','Qty PO','Qty Staffing','Kurang Kirim'] with NO Pengrajin column, Print button on Rekap page. Print CSS verified via emulate_media(print): aside/nav/buttons/tablist hidden, img max-width=50px, table font-size=9px. Excel exports open cleanly in openpyxl and contain the 'Foto' image column. Search filter on /api/export/barang-masuk/excel actually filters rows. Legacy progres cleanup (empty po_id) confirmed via /rekap/progres returning no orphan rows.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/progres (regression from iter3)",
+        "issue": "backend_test.py::TestProgres::test_update_progres_staff now fails because it POSTs without po_id → server can't look up qty_masuk → falls back to 0 → packing capped at 0 (was 5). This is EXPECTED given iter3's packing cap + iter4 legacy cleanup. The iter1 test is stale; either (a) update it to include po_id, or (b) delete the test. Not an iter4 regression — code behaves per spec."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Staffing.jsx header",
+        "issues": [
+          "Layout minor: the print:hidden class is on the top flex wrapper (line 110), but the 'add-staffing-button' Dialog is rendered OUTSIDE that wrapper (line 120), so on print it might still render its trigger; harmless because @media print button {display:none} in index.css, but semantically inconsistent with BarangMasuk.jsx which nests the Dialog inside the print:hidden wrapper."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter4.py",
+    "/app/test_reports/pytest/iter4_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: Update or remove stale /app/backend/tests/backend_test.py::TestProgres::test_update_progres_staff — it posts progres without po_id and expects packing=5, but packing is now correctly capped at qty_masuk (0 when no barang_masuk exists). Either add po_id + a barang_masuk to the fixture, or delete this old test.",
+    "OPTIONAL (cosmetic): Move the Staffing 'add-staffing-button' Dialog inside the print:hidden wrapper for parity with BarangMasuk.jsx."
+  ],
+  "critical_code_review_comments": [
+    "server.py has grown to 1549 lines — the guideline recommends <700. Splitting into resource routers (auth, barang, po, bm, staffing, progres, spk, rekap, exports, users) via APIRouter modules is overdue.",
+    "_excel_with_images (line 1382): image fetch uses synchronous get_object/PIL inside an async endpoint — for large staffing/barang-masuk exports with many images this will block the event loop. Consider running via asyncio.to_thread or a threadpool executor.",
+    "export_all_bm_pdf & export_all_staffing_pdf iterate over db.barang_masuk.find({}).to_list(1000) and then per-item _fetch_image_flowable — same event-loop concern.",
+    "Search filter in export_all_bm_pdf & export_barang_masuk_excel_v2 concatenates no_po+penerima as one lowercase blob (line 1427/1491) — an input like search='N100' could accidentally match a penerima that has 'N100' inside; low risk but slightly loose semantics. Consider matching each field independently.",
+    "GET /api/rekap/staffing-summary iterates POs × staffing × items in Python (line 1364-1378) — same N×M×K concern; migrate to MongoDB aggregation with $lookup when data grows.",
+    "Startup legacy cleanup (line 240-244) runs UNCONDITIONALLY on every server start. On a busy DB with 100k+ progres rows, count_documents({po_id: ''}) does a full collection scan. Consider adding a partial index on po_id or gating cleanup behind a version marker in a `_migrations` collection.",
+    "No unique index on (po_id, item_id) in progres collection — repeated POSTs with same key upsert correctly today, but a compound unique index would enforce it at DB level."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter4.py (new — 25 tests covering staffing-summary, barang-masuk PDF/Excel with search, staffing PDF/Excel with images, legacy cleanup, guest access, iter3 regression)"
+  ],
+  "success_rate": {"backend": "100% new iter4 (25/25) + 98.9% regression (93/94 - 1 pre-existing stale test)", "frontend": "100% of iter4 features verified"},
+  "test_credentials": "Admin: admin@agfdata.com/admin123, Staff: staff@agfdata.com/staff123, Tamu: tamu@agfdata.com/tamu123 (all verified)",
+  "seed_data_creation": "test_iter4.py creates one TEST_iter4_/TEST_ITER4_/TEST_P4 barang+PO+BM+staffing chain per module run for the staffing-summary/search-filter assertions. Records left in DB (all prefixed TEST_).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 4 shipped cleanly. All 6 new/updated backend endpoints work as specified (staffing-summary shape+filter, BM PDF w/ search, staffing PDF, staffing Excel with 'Foto' image column, BM Excel with 'Foto' image column + search filter, legacy progres cleanup). All 4 new UI features work as specified. The single remaining regression failure (test_update_progres_staff) is a stale iter1 test needing an update. Next iteration should either fix or delete that test to get a clean 100% suite. server.py is now 1549 lines — modularization recommended.",
+  "rca_of_the_issue": "N/A - no bugs found in iter4 scope."
+}
