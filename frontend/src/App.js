@@ -14,10 +14,11 @@ import RekapData from "@/pages/RekapData";
 import Dashboard from "@/pages/Dashboard";
 import UserManagement from "@/pages/UserManagement";
 
-function ProtectedRoute({ children }) {
+function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="flex items-center justify-center h-screen text-lg" data-testid="loading-screen">Memuat...</div>;
   if (!user) return <Navigate to="/login" replace />;
+  if (roles && !roles.includes(user.role)) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -38,7 +39,7 @@ function App() {
               <Route path="spk" element={<SPKPage />} />
               <Route path="progres" element={<ProgresBarang />} />
               <Route path="rekap" element={<RekapData />} />
-              <Route path="users" element={<UserManagement />} />
+              <Route path="users" element={<ProtectedRoute roles={["admin"]}><UserManagement /></ProtectedRoute>} />
             </Route>
           </Routes>
         </BrowserRouter>
