@@ -42,7 +42,7 @@ export default function Staffing() {
     setSelectedPO(po);
     setForm({ ...form, po_id: poId, items: po.items.map(i => {
       const sisa = (i.qty || 0) - (i.qty_staffed || 0);
-      return { ...i, qty: 0, _selected: true, _max_qty: sisa, _sisa: sisa };
+      return { ...i, _original_qty: i.qty || 0, qty: 0, _selected: true, _max_qty: sisa, _sisa: sisa };
     }) });
   };
 
@@ -64,7 +64,7 @@ export default function Staffing() {
       toast.error("Isi semua field wajib");
       return;
     }
-    const filteredItems = form.items.filter(i => i._selected !== false && (i.qty || 0) > 0).map(({_selected, _max_qty, ...rest}) => rest);
+    const filteredItems = form.items.filter(i => i._selected !== false && (i.qty || 0) > 0).map(({_selected, _max_qty, _sisa, _original_qty, ...rest}) => rest);
     if (filteredItems.length === 0) {
       toast.error("Pilih minimal 1 barang dengan qty > 0");
       return;
@@ -158,7 +158,7 @@ export default function Staffing() {
                           <div className="flex-1">
                             <p className="font-medium text-sm">{item.nama_barang}</p>
                             {canSeeCraftsman && <p className="text-xs text-[#5C5C5C]">{item.nama_pengrajin}</p>}
-                            <p className="text-xs text-[#5C5C5C]">Total PO: {item.qty} • Sudah dikirim: {item.qty_staffed || 0} • Sisa: <strong className="text-[#8B5A2B]">{item._sisa || 0}</strong></p>
+                            <p className="text-xs text-[#5C5C5C]">Total PO: {item._original_qty || 0} • Sudah dikirim: {item.qty_staffed || 0} • Sisa: <strong className="text-[#8B5A2B]">{item._sisa || 0}</strong></p>
                           </div>
                           <div className="w-24">
                             <Label className="text-xs">Qty (max {item._max_qty || 0})</Label>

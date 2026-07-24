@@ -395,6 +395,7 @@ async def create_po(po: POCreate, user: dict = Depends(get_current_user)):
             "harga_jual": barang["harga_jual"],
             "qty": item.qty,
             "qty_diterima": 0,
+            "qty_staffed": 0,
             "catatan": item.catatan
         })
     
@@ -556,6 +557,14 @@ async def create_staffing(staffing: StaffingCreate, user: dict = Depends(get_cur
     }
     
     result = await db.staffing.insert_one(doc)
+    
+    # Update qty_staffed in PO
+    for item in staffing.items:
+        await db.po.update_one(
+            {"_id": ObjectId(staffing.po_id), "items.barang_id": item["barang_id"]},
+            {"$inc": {"items.$.qty_staffed": item.get("qty", 0)}}
+        )
+    
     doc["_id"] = str(result.inserted_id)
     return doc
 
