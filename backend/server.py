@@ -188,27 +188,39 @@ class StaffingCreate(BaseModel):
     tanggal_keluar: str
     items: List[StaffingItem]
 
+class SPKItem(BaseModel):
+    barang_id: Optional[str] = None
+    nama_barang: str
+    spesifikasi: Optional[str] = ""
+    qty: int = Field(ge=1)
+    no_po: Optional[str] = ""
+    nama_pengrajin: Optional[str] = ""
+    pengrajin_list: Optional[List[str]] = Field(default_factory=list)
+    harga: Optional[float] = 0
+    gambar_path: Optional[str] = None
+    catatan: Optional[str] = ""
+
 class SPKCreate(BaseModel):
     no_spk: str
-    items: List[Dict[str, Any]]
+    items: List[SPKItem]
     catatan_pembayaran: str
     owner_perusahaan: str
     deadline: str
 
-class ProgresUpdate(BaseModel):
+class ProgresEntry(BaseModel):
     po_id: Optional[str] = None
-    barang_masuk_id: Optional[str] = None
     item_id: str
-    grinda: Optional[int] = 0
-    servis: Optional[int] = 0
-    finishing: Optional[int] = 0
-    packing: Optional[int] = 0
+    stage: str  # "grinda" | "servis" | "finishing" | "packing"
+    qty: int = Field(ge=1)
     tanggal: Optional[str] = None
-    # Optional metadata for manual entries (used when item_id isn't from PO)
+    # Optional metadata (denormalized for display when item isn't from PO)
     nama_barang: Optional[str] = None
     nama_pengrajin: Optional[str] = None
     spesifikasi: Optional[str] = None
     gambar_path: Optional[str] = None
+
+VALID_STAGES = ["grinda", "servis", "finishing", "packing"]
+PREV_STAGE = {"grinda": None, "servis": "grinda", "finishing": "servis", "packing": "finishing"}
 
 # ===== Startup Event =====
 @app.on_event("startup")
@@ -268,6 +280,39 @@ async def startup_event():
             f.write(f"## Staff\n- Email: staff@agfdata.com\n- Password: staff123\n- Role: staff\n\n")
             f.write(f"## Guest\n- Email: tamu@agfdata.com\n- Password: tamu123\n- Role: guest\n\n")
             f.write("## Endpoints\n- POST /api/auth/login\n- GET /api/auth/me\n- POST /api/auth/logout\n")
+        
+        # Migration: convert legacy cumulative progres docs to stage entries.
+        try:
+            legacy_count = await db.progres.count_documents({"stage": {"$exists": False}, "$or": [{"grinda": {"$gt": 0}}, {"servis": {"$gt": 0}}, {"finishing": {"$gt": 0}}, {"packing": {"$gt": 0}}]})
+            if legacy_count > 0:
+                logger.info(f"Migrating {legacy_count} legacy progres docs to stage entries…")
+                async for old in db.progres.find({"stage": {"$exists": False}}):
+                    po_id = old.get("po_id", "") or ""
+                    item_id = old.get("item_id", "")
+                    tgl = old.get("tanggal") or (old.get("updated_at", "")[:10] if old.get("updated_at") else datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+                    meta = {mk: old.get(mk) for mk in ("nama_barang", "nama_pengrajin", "spesifikasi", "gambar_path") if old.get(mk)}
+                    for stage in ["grinda", "servis", "finishing", "packing"]:
+                        qty = int(old.get(stage, 0) or 0)
+                        if qty > 0:
+                            await db.progres.insert_one({
+                                "po_id": po_id,
+                                "item_id": item_id,
+                                "stage": stage,
+                                "qty": qty,
+                                "tanggal": tgl,
+                                "created_at": old.get("updated_at") or datetime.now(timezone.utc).isoformat(),
+                                "created_by": "migration",
+                                **meta,
+                            })
+                # Remove old cumulative docs after migration
+                await db.progres.delete_many({"stage": {"$exists": False}})
+                logger.info(f"Migration complete: {legacy_count} legacy docs converted.")
+        except Exception as e:
+            logger.error(f"Progres migration error: {e}")
+        
+        # Index for progres entries
+        await db.progres.create_index([("po_id", 1), ("item_id", 1), ("stage", 1)])
+        await db.progres.create_index([("tanggal", -1)])
         
         # Migration: clean legacy progres records with empty po_id
         try:
@@ -407,16 +452,45 @@ async def get_barang_by_id(barang_id: str, user: dict = Depends(get_current_user
     
     return item
 
-# ===== Helper: aggregate packing (ready) qty per PO+barang from progres =====
+# ===== Helper: aggregate packing (ready) qty per PO+barang from progres entries =====
 async def _get_packing_map(po_id: Optional[str] = None) -> Dict[str, int]:
-    """Return { f"{po_id}_{barang_id}": packing_total } aggregated from progres collection."""
-    query = {"po_id": po_id} if po_id else {}
-    records = await db.progres.find(query).to_list(5000)
+    """Return { f"{po_id}_{barang_id}": packing_total } via MongoDB $group over new-format stage entries."""
+    match: Dict[str, Any] = {"stage": "packing"}
+    if po_id:
+        match["po_id"] = po_id
+    pipeline = [
+        {"$match": match},
+        {"$group": {"_id": {"po_id": "$po_id", "item_id": "$item_id"}, "total": {"$sum": "$qty"}}},
+    ]
     m: Dict[str, int] = {}
-    for r in records:
-        k = f"{r.get('po_id','')}_{r.get('item_id','')}"
-        m[k] = m.get(k, 0) + (r.get("packing", 0) or 0)
+    async for r in db.progres.aggregate(pipeline):
+        _id = r.get("_id", {})
+        k = f"{_id.get('po_id','')}_{_id.get('item_id','')}"
+        m[k] = int(r.get("total", 0) or 0)
     return m
+
+async def _get_stage_sums(po_id: str, item_id: str) -> Dict[str, int]:
+    """Return {'grinda':X, 'servis':Y, 'finishing':Z, 'packing':W} sum of entries for this PO+barang."""
+    pipeline = [
+        {"$match": {"po_id": po_id, "item_id": item_id, "stage": {"$in": VALID_STAGES}}},
+        {"$group": {"_id": "$stage", "total": {"$sum": "$qty"}}},
+    ]
+    sums = {s: 0 for s in VALID_STAGES}
+    async for r in db.progres.aggregate(pipeline):
+        sums[r["_id"]] = int(r.get("total", 0) or 0)
+    return sums
+
+async def _get_qty_masuk(po_id: str, item_id: str) -> int:
+    """Sum of qty_diterima for this PO+barang across all barang_masuk records."""
+    pipeline = [
+        {"$match": {"po_id": po_id}},
+        {"$unwind": "$items"},
+        {"$match": {"items.barang_id": item_id}},
+        {"$group": {"_id": None, "total": {"$sum": "$items.qty_diterima"}}},
+    ]
+    async for r in db.barang_masuk.aggregate(pipeline):
+        return int(r.get("total", 0) or 0)
+    return 0
 
 # ===== PO Routes =====
 @api_router.post("/po")
@@ -762,74 +836,106 @@ async def update_spk(spk_id: str, spk: SPKCreate, user: dict = Depends(get_curre
     
     return {"message": "SPK updated"}
 
-# ===== Progres Barang Routes =====
+# ===== Progres Barang Routes (Stage-based entries) =====
 @api_router.post("/progres")
-async def update_progres(progres: ProgresUpdate, user: dict = Depends(get_current_user)):
+async def create_progres_entry(entry: ProgresEntry, user: dict = Depends(get_current_user)):
+    """Create a NEW progres entry (per date, per stage). Pipeline-limited:
+       - grinda: qty ≤ (qty_masuk - grinda_sum)
+       - servis: qty ≤ (grinda_sum - servis_sum)
+       - finishing: qty ≤ (servis_sum - finishing_sum)
+       - packing: qty ≤ (finishing_sum - packing_sum)
+    """
     if user["role"] not in ["admin", "staff"]:
         raise HTTPException(status_code=403, detail="Not authorized")
+    if entry.stage not in VALID_STAGES:
+        raise HTTPException(status_code=400, detail=f"Stage tidak valid. Pilih: {', '.join(VALID_STAGES)}")
     
-    # Use po_id + item_id as the key (progres tracks per PO+barang)
-    key_po = progres.po_id or ""
-    query_key = {"po_id": key_po, "item_id": progres.item_id}
+    po_id = entry.po_id or ""
+    is_manual = not po_id
     
-    # Enforce packing max = qty barang masuk aggregated for this PO+barang
-    qty_masuk = 0
-    if key_po:
-        bm_records = await db.barang_masuk.find({"po_id": key_po}).to_list(1000)
-        for bm in bm_records:
-            for item in bm.get("items", []):
-                if item.get("barang_id") == progres.item_id:
-                    qty_masuk += item.get("qty_diterima", 0) or 0
+    # Compute stage sums + qty_masuk for validation
+    if is_manual:
+        # Manual mode: only enforce internal pipeline (no qty_masuk)
+        sums = await _get_stage_sums("", entry.item_id) if entry.item_id else {s: 0 for s in VALID_STAGES}
+        qty_masuk = 0
+    else:
+        sums = await _get_stage_sums(po_id, entry.item_id)
+        qty_masuk = await _get_qty_masuk(po_id, entry.item_id)
     
-    # Enforce all stage qtys cannot exceed qty_masuk (received) when linked to a PO.
-    # In manual mode (no po_id / no barang_masuk yet), stages persist as-entered without capping.
-    is_manual = not key_po or qty_masuk == 0
-    def _cap(v):
-        v = max(v or 0, 0)
-        return v if is_manual else min(v, qty_masuk)
-    grinda = _cap(progres.grinda)
-    servis = _cap(progres.servis)
-    finishing = _cap(progres.finishing)
-    packing = _cap(progres.packing)
+    # Determine cap (upstream sisa)
+    if entry.stage == "grinda":
+        upstream = qty_masuk if not is_manual else float('inf')
+        upstream_label = "Barang Masuk"
+    else:
+        prev = PREV_STAGE[entry.stage]
+        upstream = sums[prev]
+        upstream_label = prev.capitalize()
     
-    existing = await db.progres.find_one(query_key)
+    already_at_stage = sums[entry.stage]
+    sisa_before = (upstream - already_at_stage) if upstream != float('inf') else float('inf')
+    
+    if not is_manual and entry.qty > sisa_before:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Qty {entry.stage} ({entry.qty}) melebihi sisa dari {upstream_label} ({upstream} - {already_at_stage} = {max(int(sisa_before),0)})"
+        )
     
     doc = {
-        "po_id": key_po,
-        "barang_masuk_id": progres.barang_masuk_id or "",
-        "item_id": progres.item_id,
-        "grinda": grinda,
-        "servis": servis,
-        "finishing": finishing,
-        "packing": packing,
-        "qty_masuk": qty_masuk,
-        "tanggal": progres.tanggal or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "updated_at": datetime.now(timezone.utc).isoformat()
+        "po_id": po_id,
+        "item_id": entry.item_id,
+        "stage": entry.stage,
+        "qty": entry.qty,
+        "tanggal": entry.tanggal or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": user["_id"],
     }
-    # Preserve manual metadata if provided (for barang not sourced from PO items)
     for meta_key in ("nama_barang", "nama_pengrajin", "spesifikasi", "gambar_path"):
-        val = getattr(progres, meta_key, None)
+        val = getattr(entry, meta_key, None)
         if val:
             doc[meta_key] = val
     
-    if existing:
-        await db.progres.update_one(query_key, {"$set": doc})
-    else:
-        await db.progres.insert_one(doc)
+    result = await db.progres.insert_one(doc)
+    doc["_id"] = str(result.inserted_id)
     
-    doc.pop("_id", None)
+    # Return with computed sisa_after for UX
+    doc["sisa_setelah_input"] = (upstream - already_at_stage - entry.qty) if not is_manual else None
+    doc["upstream_label"] = upstream_label
+    doc["upstream_qty"] = upstream if not is_manual else None
     return doc
+
+
+@api_router.get("/progres/entries")
+async def get_progres_entries(po_id: Optional[str] = None, item_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """Return progres entry history for a PO+barang, sorted by tanggal desc."""
+    query: Dict[str, Any] = {}
+    if po_id is not None:
+        query["po_id"] = po_id
+    if item_id is not None:
+        query["item_id"] = item_id
+    entries = await db.progres.find(query).sort([("tanggal", -1), ("created_at", -1)]).to_list(2000)
+    for e in entries:
+        e["_id"] = str(e["_id"])
+    return entries
+
+
+@api_router.delete("/progres/{entry_id}")
+async def delete_progres_entry(entry_id: str, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    result = await db.progres.delete_one({"_id": ObjectId(entry_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Progres entry not found")
+    return {"message": "Progres entry deleted"}
 
 
 @api_router.get("/progres/by-po")
 async def get_progres_by_po(user: dict = Depends(get_current_user)):
-    """Return progres grouped by PO with barang data synced from barang_masuk."""
+    """Return progres aggregated (per stage) grouped by PO+barang, synced with barang_masuk."""
     pos = await db.po.find({}).to_list(1000)
     barang_masuk = await db.barang_masuk.find({}).to_list(1000)
-    progres_records = await db.progres.find({}).to_list(1000)
     
-    # Aggregate qty_masuk per PO+barang
-    bm_agg = {}
+    # Aggregate qty_masuk per PO+barang from barang_masuk
+    bm_agg: Dict[str, Dict[str, Any]] = {}
     for bm in barang_masuk:
         po_id = bm.get("po_id", "")
         for item in bm.get("items", []):
@@ -847,8 +953,27 @@ async def get_progres_by_po(user: dict = Depends(get_current_user)):
                 }
             bm_agg[k]["qty_masuk"] += item.get("qty_diterima", 0) or 0
     
-    # Map progres
-    prog_map = {f"{p.get('po_id','')}_{p.get('item_id')}": p for p in progres_records}
+    # Aggregate stage sums + last tanggal per PO+barang
+    pipeline = [
+        {"$match": {"stage": {"$in": VALID_STAGES}}},
+        {"$group": {
+            "_id": {"po_id": "$po_id", "item_id": "$item_id", "stage": "$stage"},
+            "total": {"$sum": "$qty"},
+            "last_tanggal": {"$max": "$tanggal"},
+        }},
+    ]
+    stage_agg: Dict[str, Dict[str, Any]] = {}
+    async for r in db.progres.aggregate(pipeline):
+        _id = r.get("_id", {})
+        k = f"{_id.get('po_id','')}_{_id.get('item_id','')}"
+        if k not in stage_agg:
+            stage_agg[k] = {s: 0 for s in VALID_STAGES}
+            stage_agg[k]["tanggal"] = ""
+        stage_agg[k][_id["stage"]] = int(r.get("total", 0) or 0)
+        # Track latest tanggal across any stage
+        lt = r.get("last_tanggal") or ""
+        if lt > stage_agg[k]["tanggal"]:
+            stage_agg[k]["tanggal"] = lt
     
     # Build response per PO
     result = []
@@ -860,29 +985,34 @@ async def get_progres_by_po(user: dict = Depends(get_current_user)):
             k = f"{po_id}_{bid}"
             bm_data = bm_agg.get(k)
             if not bm_data:
-                continue  # only include items already received in barang_masuk
-            pr = prog_map.get(k, {"grinda": 0, "servis": 0, "finishing": 0, "packing": 0, "tanggal": ""})
-            packing = pr.get("packing", 0) or 0
+                continue
+            st = stage_agg.get(k, {s: 0 for s in VALID_STAGES})
+            grinda = st.get("grinda", 0)
+            servis = st.get("servis", 0)
+            finishing = st.get("finishing", 0)
+            packing = st.get("packing", 0)
+            qty_masuk = bm_data["qty_masuk"]
             po_items.append({
                 "barang_id": bid,
                 "nama_barang": bm_data["nama_barang"],
                 "spesifikasi": bm_data["spesifikasi"],
                 "nama_pengrajin": bm_data["nama_pengrajin"],
                 "gambar_path": bm_data["gambar_path"],
-                "qty_masuk": bm_data["qty_masuk"],
-                "grinda": pr.get("grinda", 0) or 0,
-                "servis": pr.get("servis", 0) or 0,
-                "finishing": pr.get("finishing", 0) or 0,
+                "qty_masuk": qty_masuk,
+                "grinda": grinda,
+                "servis": servis,
+                "finishing": finishing,
                 "packing": packing,
-                "tanggal": pr.get("tanggal", "") or "",
-                "komplit": packing >= bm_data["qty_masuk"] and bm_data["qty_masuk"] > 0,
+                # Sisa (remaining) per stage
+                "sisa_grinda": max(qty_masuk - grinda, 0),
+                "sisa_servis": max(grinda - servis, 0),
+                "sisa_finishing": max(servis - finishing, 0),
+                "sisa_packing": max(finishing - packing, 0),
+                "tanggal": st.get("tanggal", "") or "",
+                "komplit": packing >= qty_masuk and qty_masuk > 0,
             })
         if po_items:
-            result.append({
-                "po_id": po_id,
-                "no_po": po["no_po"],
-                "items": po_items,
-            })
+            result.append({"po_id": po_id, "no_po": po["no_po"], "items": po_items})
     
     if user["role"] == "guest":
         for po in result:
@@ -894,7 +1024,8 @@ async def get_progres_by_po(user: dict = Depends(get_current_user)):
 
 @api_router.get("/progres")
 async def get_progres(user: dict = Depends(get_current_user)):
-    items = await db.progres.find({}).to_list(1000)
+    """Legacy endpoint: return raw progres entries."""
+    items = await db.progres.find({}).to_list(2000)
     for item in items:
         item["_id"] = str(item["_id"])
     return items

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { Plus, PackageOpen, Download, Package, Search, Trash2, Edit, Eye, Printer } from "lucide-react";
@@ -155,7 +155,10 @@ export default function BarangMasuk() {
                 <Button className="bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="add-bm-button"><Plus className="w-4 h-4 mr-2" /> Catat Masuk</Button>
               </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                <DialogHeader><DialogTitle>{editingId ? "Edit Barang Masuk" : "Catat Barang Masuk"}</DialogTitle></DialogHeader>
+                <DialogHeader>
+                  <DialogTitle>{editingId ? "Edit Barang Masuk" : "Catat Barang Masuk"}</DialogTitle>
+                  <DialogDescription>Pilih PO lalu centang barang yang diterima dan isi jumlahnya. Qty dibatasi sisa PO.</DialogDescription>
+                </DialogHeader>
                 <div className="space-y-4">
                   <div>
                     <Label>Pilih PO</Label>

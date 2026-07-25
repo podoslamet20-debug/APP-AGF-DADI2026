@@ -16,6 +16,21 @@ Aplikasi rekap data barang furniture "AGFDATA" - Database Barang, PO, Barang Mas
 
 ## Implementation Log
 
+### Iteration 9 (Feb 2026) - Progres Barang stage-entry model + backlog cleanup
+- **PROGRES BARANG rebuilt** as per-date, per-stage entry log (each POST creates a new record, no more upsert):
+  - `POST /api/progres` accepts `{po_id, item_id, stage, qty, tanggal, ...meta}`; validates pipeline: grinda ≤ (qty_masuk − grinda_sum); servis ≤ (grinda_sum − servis_sum); finishing ≤ (servis_sum − finishing_sum); packing ≤ (finishing_sum − packing_sum); returns HTTP 400 with descriptive Indonesian error including current sisa
+  - Response includes `sisa_setelah_input` and `upstream_label` for UX
+  - `GET /api/progres/entries?po_id=&item_id=` returns entry history (sorted tanggal desc)
+  - `DELETE /api/progres/{id}` removes an entry (admin only)
+  - `GET /api/progres/by-po` now aggregates via `$group` per stage + returns `sisa_grinda`/`sisa_servis`/`sisa_finishing`/`sisa_packing`
+- **Migration on startup**: converted 27 legacy cumulative progres docs into stage entries (1–4 entries each, backdated to updated_at)
+- **Frontend**: `Tambah Progres` dialog now has Stage select + live sisa hint + qty cap by upstream sisa. Item cards show 4 stat tiles (per stage: value + sisa). Toggle "Lihat Riwayat Entry" per barang shows the full entry log with delete option.
+- **Backlog knocked out:**
+  - `SPKItem` Pydantic model added (SPKCreate.items now `List[SPKItem]` — barang_id, nama_barang, qty (ge=1), pengrajin_list default_factory=list, catatan, harga, etc.)
+  - MongoDB `$group` aggregation for `_get_packing_map`, `_get_stage_sums`, `_get_qty_masuk` — no more O(N) collection scans
+  - `DialogDescription` added to all `DialogContent` (BarangMasuk, DatabaseBarang, POPage, SPKPage, Staffing, UserManagement, ProgresBarang) — a11y warnings fixed
+  - Verified `update_bm` already uses validate-first (iter6 fix intact)
+
 ### Iteration 8 (Feb 2026) - Progres Barang Input Dialog + Tanggal
 - **New "Tambah Progres" dialog** on Progres Barang page with source toggle: Dari PO (cascading dropdown PO → Barang, auto-fills metadata) or Manual (barang from full DB, editable overrides)
 - **Tanggal field** (`tanggal: Optional[str]`) added to `ProgresUpdate` model; defaults to today UTC; saved in progres doc; returned in `/api/progres/by-po`; shown as badge with calendar icon on each item card

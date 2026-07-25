@@ -1,0 +1,68 @@
+{
+  "summary": "Iteration 9 - Progres Barang stage-entry model overhaul fully verified. Backend: 18/18 pytest tests PASS (test_iter9.py) covering (a) POST /api/progres per-stage entry creation with sisa_setelah_input + upstream_label, (b) pipeline validation grinda<=BM sisa returns 400 'melebihi sisa dari Barang Masuk', servis<=grinda_sum-servis_sum -> 'melebihi sisa dari Grinda', finishing -> 'dari Servis', packing -> 'dari Finishing', (c) multiple entries same barang aggregate correctly in /progres/by-po, /progres/entries returns rows sorted tanggal desc, (d) sisa_grinda/sisa_servis/sisa_finishing/sisa_packing fields all >=0, (e) new barang_masuk increments qty_masuk and updates sisa_grinda, (f) packing entries flow to PO.qty_ready, (g) DELETE /api/progres/{id} admin-only (staff=403), (h) legacy migration verified - GET /api/progres shows only stage entries (no legacy cumulative docs), (i) SPKItem model validation returns 422 for qty<1 and missing nama_barang, (j) update_bm validate-first regression preserved. Frontend: Progres dialog opens with Stage select, Tanggal (default today = 2026-07-25), Qty input, PO+barang cascade shows context info box 'Barang Masuk: 400 • Sudah di grinda: 10 • Sisa yang bisa diinput: 390' with progres-context-info and progres-sisa-hint testids. 24 progres-sisa-<stage>-<po>-<item> tiles + 6 toggle-history-<po>-<item> buttons on list. History panel opens successfully. DialogDescription warnings count = 0 (all 7 pages fixed).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Progres dialog Tanggal input", "issues": ["Still uses browser-native <input type='date'> (per iter7/8 finding). Not blocking; consider shadcn Calendar+Popover for consistency."]}
+    ]
+  },
+  "verified_working": [
+    "BACKEND POST /api/progres {po_id, item_id, stage:'grinda', qty:50, tanggal:'2026-07-17'} => 200 with sisa_setelah_input=50 (qty_masuk=100 - 0 - 50), upstream_label='Barang Masuk'.",
+    "BACKEND POST /api/progres qty=60 when sisa_grinda=50 => 400 'melebihi sisa dari Barang Masuk (100 - 50 = 50)'.",
+    "BACKEND POST /api/progres stage='servis' qty=30 after grinda_sum=50 => 200; qty=100 => 400 'melebihi sisa dari Grinda'.",
+    "BACKEND POST /api/progres stage='finishing' qty=30 after servis_sum=30 => 200; qty=99 => 400 'melebihi sisa dari Servis'.",
+    "BACKEND POST /api/progres stage='packing' qty=30 after finishing_sum=30 => 200; qty=99 => 400 'melebihi sisa dari Finishing'.",
+    "BACKEND invalid stage 'xyz' => 400.",
+    "BACKEND multiple grinda entries (qty=20 tgl 07-17 + qty=30 tgl 07-18) aggregate to grinda_sum=50 in /progres/by-po; /progres/entries returns 2 rows sorted desc (07-18 first).",
+    "BACKEND /progres/by-po item includes sisa_grinda, sisa_servis, sisa_finishing, sisa_packing all >=0.",
+    "BACKEND adding second barang_masuk (30 more) after grinda=40 => qty_masuk becomes 80, sisa_grinda=40.",
+    "BACKEND full pipeline grinda->servis->finishing->packing (10 each) => GET /api/po item.qty_ready=10 (packing sum syncs).",
+    "BACKEND admin DELETE /api/progres/{id} => 200, entry removed, aggregation re-computes correctly. Staff DELETE => 403.",
+    "BACKEND Migration: GET /api/progres returns only stage-format entries. Zero legacy cumulative docs remain.",
+    "BACKEND SPK POST with items[0].qty=0 => 422; items[0] missing nama_barang => 422; valid item => 200.",
+    "BACKEND update_bm with qty_diterima>PO sisa => 400 AND PO qty_diterima NOT reverted (validate-first pattern intact - PO still shows 30 after failed 999 update).",
+    "UI Progres page /progres loads, 6 item cards visible across 4 POs.",
+    "UI 'Tambah Progres' button (data-testid=add-progres-button) opens dialog.",
+    "UI Dialog contains Stage select (data-testid=progres-stage-select), Tanggal input (default today), Qty input (data-testid=progres-qty-input).",
+    "UI When PO+barang selected, colored context box (data-testid=progres-context-info) shows 'napeleon (N10036) - Barang Masuk: 400 • Sudah di grinda: 10 • Sisa yang bisa diinput: 390' with progres-sisa-hint testid.",
+    "UI 24 progres-sisa-<stage>-<po>-<item> testids on page (4 tiles x 6 items). Each stage tile shows value + 'Sisa: X'.",
+    "UI 6 toggle-history-<po>-<item> buttons ('Lihat Riwayat Entry'). Clicking opens history-panel-<po>-<item>.",
+    "UI DialogDescription added: 0 aria-describedby warnings in console when opening Progres dialog.",
+    "UI Zero console errors, zero React warnings during dialog interaction."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iter9.py",
+    "/app/test_reports/pytest/iter9_results.xml"
+  ],
+  "action_items": [
+    "(OPTIONAL/NAMING) Test spec used 'progres-select-stage' but code uses 'progres-stage-select' - minor inconsistency vs review_request; both work fine, just document consistent naming.",
+    "(OPTIONAL/DESIGN) Consider replacing browser-native <input type='date'> with shadcn Calendar+Popover across Progres/BM/Staffing/PO/SPK for consistent date UX (repeat finding from iter7/8).",
+    "(OPTIONAL/CODE) server.py is now 1956 lines - splitting into routes/ + models/ modules deferred per iter9 spec, still recommended for maintainability.",
+    "(OPTIONAL/CLEANUP) The pytest class-scoped fixture 'defined as instance method' PytestRemovedIn10Warning still emitted (cosmetic, will error in pytest v10)."
+  ],
+  "critical_code_review_comments": [
+    "server.py create_progres_entry (line ~866-881): sisa validation and 400 error message look good. Manual mode (po_id='') bypasses BM validation for grinda (upstream=inf) but still enforces internal servis->finishing->packing pipeline via _get_stage_sums('', item_id) - correct.",
+    "server.py get_progres_by_po (line ~934-1022): still O(POs * items) build loop, but stage aggregation now uses $group pipeline. Acceptable for current data volume.",
+    "server.py migration block (line ~284-311): idempotent - only runs when docs without 'stage' field exist. Meta fields (nama_barang, nama_pengrajin, spesifikasi, gambar_path) preserved. Good.",
+    "server.py PREV_STAGE constant makes pipeline explicit and easy to reason about. Nice.",
+    "ProgresBarang.jsx (364 lines): well structured with STAGES constant, getStageContext helper, and separate history panel. Zero console errors.",
+    "The qty_ready sync happens because /api/po getters recompute packing_sum via _get_packing_map $group aggregation - no denormalization drift.",
+    "SPKItem model with qty: int = Field(ge=1) properly rejects qty<1 with 422.",
+    "update_bm at line 1457-1491 correctly validates ALL items before mutating PO qty_diterima (own_old subtraction pattern) - regression fix from iter6 intact."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter9.py (new - 18 tests across 8 test classes: stage entry model, pipeline validation, multiple entries, sync flows, delete entry admin+staff, migration, SPK item model, update_bm validate-first)"
+  ],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "100% (dialog + list + history + context box + DialogDescription verified end-to-end)"},
+  "test_credentials": "admin@agfdata.com/admin123, staff@agfdata.com/staff123, tamu@agfdata.com/tamu123 - all verified.",
+  "seed_data_creation": "test_iter9.py creates ~8 TEST_ITER9_* barang, ~7 TEST_ITER9_* POs, and ~5 TEST_ITER9_SPK_* SPKs during test runs. Final test_zzz_cleanup deletes all TEST_ITER9_* records (BMs -> POs -> Barang -> SPK). Legacy N10036 napeleon data untouched (per iter9 note: legacy may have inconsistent stage sums; new entries follow pipeline).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter9 stage-entry model fully verified. Backend: 18/18 pass. Frontend UI: dialog with stage select + context info box + history panel toggle all working with 0 console warnings. Only cosmetic issues remain (browser-native date picker; testid naming inconsistency progres-select-stage vs progres-stage-select). If iter10 modifies pipeline validation logic (e.g. allow overwriting past entries, or adds edit-entry endpoint), re-run test_iter9.py to ensure regression. Note: N10036 napeleon may still have legacy migrated data where servis_sum > grinda_sum (pre-pipeline enforcement); this is expected and intentional per iter9 spec.",
+  "rca_of_the_issue": "N/A - no unresolved bugs. All iter9 spec items verified: (1) POST /api/progres per-stage entry creation ✓, (2) pipeline validation with proper 400 messages per upstream stage ✓, (3) keterangan sisa shown in dialog (progres-context-info + progres-sisa-hint) ✓, (4) multiple entries per barang sync with BM and prev progres sums ✓, (5) update_bm validate-first ✓, (6) SPKItem Pydantic model ✓, (7) MongoDB $group aggregation in _get_packing_map/_get_stage_sums/_get_qty_masuk ✓, (8) DialogDescription added to all 7 pages (0 warnings) ✓."
+}

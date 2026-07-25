@@ -6,9 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { TrendingUp, Package, CheckCircle2, Download, Printer, Plus, Calendar } from "lucide-react";
+import { TrendingUp, Package, CheckCircle2, Download, Printer, Plus, Calendar, History } from "lucide-react";
+
+const STAGES = [
+  { key: "grinda", label: "Grinda", color: "#FFC107", prev: null, prevLabel: "Barang Masuk" },
+  { key: "servis", label: "Servis", color: "#2196F3", prev: "grinda", prevLabel: "Grinda" },
+  { key: "finishing", label: "Finishing", color: "#9C27B0", prev: "servis", prevLabel: "Servis" },
+  { key: "packing", label: "Packing / Ready", color: "#4CAF50", prev: "finishing", prevLabel: "Finishing" },
+];
 
 export default function ProgresBarang() {
   const { API, canEditPartial, canSeeCraftsman } = useAuth();
@@ -19,20 +26,20 @@ export default function ProgresBarang() {
   const [filterTanggal, setFilterTanggal] = useState("");
   const [open, setOpen] = useState(false);
   const [manual, setManual] = useState(false);
-  const [form, setForm] = useState({
+  const [historyMap, setHistoryMap] = useState({}); // key: `${po_id}_${item_id}` -> [entries]
+  const [historyOpen, setHistoryOpen] = useState({}); // key -> boolean
+  const initialForm = {
     po_id: "",
     item_id: "",
+    stage: "grinda",
+    qty: 0,
     tanggal: new Date().toISOString().slice(0, 10),
-    grinda: 0,
-    servis: 0,
-    finishing: 0,
-    packing: 0,
-    // manual-only meta
     nama_barang: "",
     nama_pengrajin: "",
     spesifikasi: "",
     gambar_path: "",
-  });
+  };
+  const [form, setForm] = useState(initialForm);
 
   const load = async () => {
     try {
@@ -49,65 +56,49 @@ export default function ProgresBarang() {
 
   useEffect(() => { load(); }, []);
 
-  // Compute qty_masuk for a given po_id + barang_id from progresList (already aggregated)
-  const getQtyMasuk = (poId, barangId) => {
-    const po = progresList.find(p => p.po_id === poId);
-    const it = po?.items.find(i => i.barang_id === barangId);
-    return it?.qty_masuk || 0;
-  };
-
-  const selectedPO = poList.find(p => (p._id || p.id) === form.po_id);
-  const selectedItem = selectedPO?.items.find(i => i.barang_id === form.item_id);
-  const currentQtyMasuk = manual ? 0 : getQtyMasuk(form.po_id, form.item_id);
-  const maxQty = manual ? Infinity : currentQtyMasuk;
-
-  const updateProgres = async (poId, barangId, key, val, maxQty) => {
-    if (!canEditPartial) return;
-    const clamped = Math.max(0, parseInt(val) || 0);
-    const finalVal = maxQty > 0 ? Math.min(clamped, maxQty) : clamped;
-    const po = progresList.find(p => p.po_id === poId);
-    const item = po?.items.find(i => i.barang_id === barangId);
-    if (!item) return;
-    const payload = {
-      po_id: poId,
-      item_id: barangId,
-      grinda: item.grinda,
-      servis: item.servis,
-      finishing: item.finishing,
-      packing: item.packing,
-      tanggal: item.tanggal || new Date().toISOString().slice(0, 10),
-      [key]: finalVal,
-    };
+  const loadHistory = async (poId, itemId) => {
+    const k = `${poId}_${itemId}`;
     try {
-      await axios.post(`${API}/progres`, payload);
-      setProgresList(prev => prev.map(po => po.po_id !== poId ? po : {
-        ...po,
-        items: po.items.map(it => it.barang_id !== barangId ? it : {
-          ...it,
-          [key]: finalVal,
-          komplit: (key === "packing" ? finalVal : it.packing) >= it.qty_masuk && it.qty_masuk > 0,
-        })
-      }));
-    } catch (e) { toast.error("Gagal update progres"); }
+      const { data } = await axios.get(`${API}/progres/entries`, { params: { po_id: poId, item_id: itemId } });
+      setHistoryMap(prev => ({ ...prev, [k]: data }));
+    } catch (e) { console.error(e); }
   };
+
+  const toggleHistory = (poId, itemId) => {
+    const k = `${poId}_${itemId}`;
+    const willOpen = !historyOpen[k];
+    setHistoryOpen(prev => ({ ...prev, [k]: willOpen }));
+    if (willOpen && !historyMap[k]) loadHistory(poId, itemId);
+  };
+
+  // Selected item from progresList (has aggregate sums + sisa)
+  const selectedProgres = progresList.find(p => p.po_id === form.po_id)?.items.find(i => i.barang_id === form.item_id);
+  const selectedPO = poList.find(p => (p._id || p.id) === form.po_id);
+
+  // Compute upstream/max for the current form.stage
+  const getStageContext = () => {
+    if (manual) return { max: Infinity, upstreamLabel: "—", upstreamQty: null, sisa: null };
+    if (!selectedProgres) return { max: 0, upstreamLabel: "Barang Masuk", upstreamQty: 0, sisa: 0 };
+    const stage = form.stage;
+    const s = selectedProgres;
+    const upstreamQty = stage === "grinda" ? s.qty_masuk : (s[STAGES.find(x => x.key === stage).prev] || 0);
+    const alreadyAt = s[stage] || 0;
+    const sisa = Math.max(0, upstreamQty - alreadyAt);
+    const upstreamLabel = STAGES.find(x => x.key === stage).prevLabel;
+    return { max: sisa, upstreamLabel, upstreamQty, sisa, alreadyAt };
+  };
+  const ctx = getStageContext();
 
   const submitCreate = async () => {
-    if (!form.item_id) {
-      toast.error("Pilih atau isi barang terlebih dahulu");
-      return;
-    }
-    if (!manual && !form.po_id) {
-      toast.error("Pilih PO terlebih dahulu");
-      return;
-    }
+    if (!form.item_id) return toast.error("Pilih atau isi barang");
+    if (!manual && !form.po_id) return toast.error("Pilih PO terlebih dahulu");
+    if (!form.qty || form.qty <= 0) return toast.error("Qty harus lebih besar dari 0");
     const payload = {
       po_id: form.po_id || null,
       item_id: form.item_id,
+      stage: form.stage,
+      qty: parseInt(form.qty),
       tanggal: form.tanggal,
-      grinda: parseInt(form.grinda) || 0,
-      servis: parseInt(form.servis) || 0,
-      finishing: parseInt(form.finishing) || 0,
-      packing: parseInt(form.packing) || 0,
     };
     if (manual) {
       payload.nama_barang = form.nama_barang;
@@ -116,37 +107,48 @@ export default function ProgresBarang() {
       payload.gambar_path = form.gambar_path;
     }
     try {
-      await axios.post(`${API}/progres`, payload);
-      toast.success("Progres disimpan");
+      const { data } = await axios.post(`${API}/progres`, payload);
+      const sisa = data.sisa_setelah_input;
+      toast.success(sisa != null ? `Progres ${form.stage} +${form.qty} disimpan. Sisa ${form.stage}: ${sisa}` : `Progres ${form.stage} +${form.qty} disimpan.`);
       setOpen(false);
       setManual(false);
-      setForm({ po_id: "", item_id: "", tanggal: new Date().toISOString().slice(0, 10), grinda: 0, servis: 0, finishing: 0, packing: 0, nama_barang: "", nama_pengrajin: "", spesifikasi: "", gambar_path: "" });
+      setForm(initialForm);
+      // Invalidate any open history
+      setHistoryMap({});
       load();
-    } catch (e) { toast.error("Gagal simpan progres: " + (e.response?.data?.detail || "")); }
+    } catch (e) {
+      toast.error("Gagal simpan: " + (e.response?.data?.detail || e.message));
+    }
+  };
+
+  const deleteEntry = async (entryId, poId, itemId) => {
+    if (!window.confirm("Hapus entry ini?")) return;
+    try {
+      await axios.delete(`${API}/progres/${entryId}`);
+      toast.success("Entry dihapus");
+      const k = `${poId}_${itemId}`;
+      setHistoryMap(prev => ({ ...prev, [k]: undefined }));
+      if (historyOpen[k]) loadHistory(poId, itemId);
+      load();
+    } catch (e) { toast.error("Gagal hapus: " + (e.response?.data?.detail || "")); }
   };
 
   const onSelectBarangFromPO = (barangId) => {
     const item = selectedPO?.items.find(i => i.barang_id === barangId);
     if (!item) return;
     setForm(f => ({
-      ...f,
-      item_id: barangId,
-      nama_barang: item.nama_barang || "",
-      nama_pengrajin: item.nama_pengrajin || "",
-      spesifikasi: item.spesifikasi || "",
-      gambar_path: item.gambar_path || "",
+      ...f, item_id: barangId,
+      nama_barang: item.nama_barang || "", nama_pengrajin: item.nama_pengrajin || "",
+      spesifikasi: item.spesifikasi || "", gambar_path: item.gambar_path || "",
     }));
   };
 
   const onSelectBarangManual = (barangId) => {
     const b = barangList.find(bl => (bl._id || bl.id) === barangId);
     setForm(f => ({
-      ...f,
-      item_id: barangId,
-      nama_barang: b?.nama_barang || "",
-      nama_pengrajin: b?.nama_pengrajin || "",
-      spesifikasi: b?.spesifikasi || "",
-      gambar_path: b?.gambar_path || "",
+      ...f, item_id: barangId,
+      nama_barang: b?.nama_barang || "", nama_pengrajin: b?.nama_pengrajin || "",
+      spesifikasi: b?.spesifikasi || "", gambar_path: b?.gambar_path || "",
     }));
   };
 
@@ -158,26 +160,24 @@ export default function ProgresBarang() {
 
   const filtered = progresList.filter(po => filterPO === "all" || po.po_id === filterPO);
 
-  const clampInput = (v) => {
-    const n = Math.max(0, parseInt(v) || 0);
-    return manual ? n : (maxQty > 0 ? Math.min(n, maxQty) : n);
-  };
-
   return (
     <div className="space-y-6" data-testid="progres-page">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 print:hidden">
         <div>
           <h1 className="text-3xl font-bold text-[#1A1A1A] tracking-tight" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>Progres Barang</h1>
-          <p className="text-[#5C5C5C] mt-1">Tracking produksi per PO: Grinda → Servis → Finishing → Packing</p>
+          <p className="text-[#5C5C5C] mt-1">Tracking per tanggal: Grinda → Servis → Finishing → Packing. Setiap input jadi entry baru.</p>
         </div>
         <div className="flex gap-2 flex-wrap items-end">
           {canEditPartial && (
-            <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setManual(false); setForm({ po_id: "", item_id: "", tanggal: new Date().toISOString().slice(0, 10), grinda: 0, servis: 0, finishing: 0, packing: 0, nama_barang: "", nama_pengrajin: "", spesifikasi: "", gambar_path: "" }); } }}>
+            <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setManual(false); setForm(initialForm); } }}>
               <DialogTrigger asChild>
                 <Button className="bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="add-progres-button"><Plus className="w-4 h-4 mr-2" /> Tambah Progres</Button>
               </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                <DialogHeader><DialogTitle>Tambah / Update Progres Barang</DialogTitle></DialogHeader>
+                <DialogHeader>
+                  <DialogTitle>Tambah Entry Progres</DialogTitle>
+                  <DialogDescription>Setiap input jadi entry baru dengan tanggal & stage. Qty otomatis dibatasi oleh sisa dari stage sebelumnya.</DialogDescription>
+                </DialogHeader>
                 <div className="space-y-4">
                   <div className="flex items-center gap-2">
                     <Button type="button" size="sm" variant={manual ? "outline" : "default"} onClick={() => setManual(false)} data-testid="progres-source-po" className={manual ? "" : "bg-[#8B5A2B] hover:bg-[#7A4E24] text-white"}>Dari PO</Button>
@@ -203,9 +203,6 @@ export default function ProgresBarang() {
                             {(selectedPO?.items || []).map((it, i) => <SelectItem key={i} value={it.barang_id}>{it.nama_barang}</SelectItem>)}
                           </SelectContent>
                         </Select>
-                        {selectedItem && (
-                          <p className="text-xs text-[#5C5C5C] mt-1">Qty Barang Masuk (max input): <strong className="text-[#8B5A2B]">{currentQtyMasuk}</strong>{currentQtyMasuk === 0 && <span className="text-[#F44336]"> — belum ada barang masuk untuk item ini</span>}</p>
-                        )}
                       </div>
                     </>
                   ) : (
@@ -219,50 +216,50 @@ export default function ProgresBarang() {
                           </SelectContent>
                         </Select>
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        <div>
-                          <Label className="text-xs">Nama Barang (opsional override)</Label>
-                          <Input value={form.nama_barang} onChange={(e) => setForm({ ...form, nama_barang: e.target.value })} data-testid="progres-manual-nama" />
-                        </div>
-                        <div>
-                          <Label className="text-xs">Nama Pengrajin</Label>
-                          <Input value={form.nama_pengrajin} onChange={(e) => setForm({ ...form, nama_pengrajin: e.target.value })} data-testid="progres-manual-pengrajin" />
-                        </div>
-                      </div>
-                      <p className="text-xs text-[#F44336]">Mode manual: qty tidak dibatasi barang masuk. Input dengan hati-hati.</p>
+                      <p className="text-xs text-[#F44336]">Mode manual: qty tidak dibatasi pipeline.</p>
                     </>
                   )}
 
-                  <div>
-                    <Label><Calendar className="w-3 h-3 inline mr-1" /> Tanggal Progres</Label>
-                    <Input type="date" value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} data-testid="progres-tanggal-input" />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <Label><Calendar className="w-3 h-3 inline mr-1" /> Tanggal Input</Label>
+                      <Input type="date" value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} data-testid="progres-tanggal-input" />
+                    </div>
+                    <div>
+                      <Label>Stage</Label>
+                      <Select value={form.stage} onValueChange={(v) => setForm({ ...form, stage: v, qty: 0 })}>
+                        <SelectTrigger data-testid="progres-stage-select"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {STAGES.map(s => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    {[
-                      { key: "grinda", label: "Grinda", color: "#FFC107" },
-                      { key: "servis", label: "Servis", color: "#2196F3" },
-                      { key: "finishing", label: "Finishing", color: "#9C27B0" },
-                      { key: "packing", label: "Packing/Ready", color: "#4CAF50" },
-                    ].map((s) => (
-                      <div key={s.key} className="p-3 border border-[#E5E5E5] rounded-md">
-                        <Label className="text-xs" style={{ color: s.color }}>{s.label}</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={manual ? undefined : maxQty || undefined}
-                          value={form[s.key]}
-                          onChange={(e) => setForm({ ...form, [s.key]: clampInput(e.target.value) })}
-                          data-testid={`progres-form-${s.key}`}
-                          className="mt-1"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  {!manual && maxQty > 0 && (
-                    <p className="text-xs text-[#5C5C5C]">Semua qty dibatasi maksimum <strong>{maxQty}</strong> (dari Barang Masuk).</p>
+                  {!manual && selectedProgres && (
+                    <div className="p-3 bg-[#F0E6D6] rounded-md border border-[#D4B896] text-sm" data-testid="progres-context-info">
+                      <p className="text-[#1A1A1A]"><strong>{selectedProgres.nama_barang}</strong> ({selectedPO?.no_po})</p>
+                      <p className="text-[#5C5C5C] mt-1">
+                        {ctx.upstreamLabel}: <strong>{ctx.upstreamQty}</strong> • Sudah di {form.stage}: <strong>{ctx.alreadyAt}</strong> • <span className="text-[#8B5A2B]">Sisa yang bisa diinput: <strong data-testid="progres-sisa-hint">{ctx.sisa}</strong></span>
+                      </p>
+                    </div>
                   )}
-                  <Button onClick={submitCreate} className="w-full bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="submit-progres-button">Simpan Progres</Button>
+
+                  <div>
+                    <Label>Qty Input {!manual && ctx.max !== Infinity && <span className="text-xs text-[#5C5C5C]">(max {ctx.max})</span>}</Label>
+                    <Input type="number" min={1} max={manual ? undefined : ctx.max || undefined}
+                      value={form.qty}
+                      onChange={(e) => {
+                        const n = Math.max(0, parseInt(e.target.value) || 0);
+                        setForm({ ...form, qty: manual ? n : (ctx.max > 0 ? Math.min(n, ctx.max) : 0) });
+                      }}
+                      data-testid="progres-qty-input"
+                      disabled={!manual && ctx.max === 0}
+                    />
+                    {!manual && ctx.max === 0 && <p className="text-xs text-[#F44336] mt-1">Tidak ada sisa yang bisa diinput ke {form.stage}. Isi stage sebelumnya dulu.</p>}
+                  </div>
+
+                  <Button onClick={submitCreate} className="w-full bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="submit-progres-button" disabled={!manual && ctx.max === 0}>Simpan Entry</Button>
                 </div>
               </DialogContent>
             </Dialog>
@@ -305,45 +302,57 @@ export default function ProgresBarang() {
                 <p className="text-xs text-[#5C5C5C]">{po.items.length} jenis barang</p>
               </div>
               <div className="space-y-4">
-                {po.items.map((item, idx) => (
-                  <div key={idx} className="p-4 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]" data-testid={`progres-item-${poIdx}-${idx}`}>
-                    <div className="flex flex-col md:flex-row gap-4 mb-3">
-                      {item.gambar_path ? <img src={`${API}/files/${item.gambar_path}`} className="w-full md:w-24 h-24 object-cover rounded" alt="" /> : <div className="w-full md:w-24 h-24 bg-[#F0E6D6] rounded flex items-center justify-center"><Package className="w-8 h-8 text-[#8B5A2B]" /></div>}
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          <h3 className="text-lg font-bold text-[#1A1A1A]">{item.nama_barang}</h3>
-                          {item.komplit && <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-[#4CAF50] text-white rounded-full"><CheckCircle2 className="w-3 h-3" /> KOMPLIT</span>}
-                          {item.tanggal && <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-[#F0E6D6] text-[#8B5A2B] rounded-full"><Calendar className="w-3 h-3" /> {item.tanggal}</span>}
+                {po.items.map((item, idx) => {
+                  const k = `${po.po_id}_${item.barang_id}`;
+                  return (
+                    <div key={idx} className="p-4 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]" data-testid={`progres-item-${poIdx}-${idx}`}>
+                      <div className="flex flex-col md:flex-row gap-4 mb-3">
+                        {item.gambar_path ? <img src={`${API}/files/${item.gambar_path}`} className="w-full md:w-24 h-24 object-cover rounded" alt="" /> : <div className="w-full md:w-24 h-24 bg-[#F0E6D6] rounded flex items-center justify-center"><Package className="w-8 h-8 text-[#8B5A2B]" /></div>}
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <h3 className="text-lg font-bold text-[#1A1A1A]">{item.nama_barang}</h3>
+                            {item.komplit && <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-[#4CAF50] text-white rounded-full"><CheckCircle2 className="w-3 h-3" /> KOMPLIT</span>}
+                            {item.tanggal && <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-[#F0E6D6] text-[#8B5A2B] rounded-full"><Calendar className="w-3 h-3" /> Update: {item.tanggal}</span>}
+                          </div>
+                          {canSeeCraftsman && <p className="text-sm text-[#5C5C5C]">Pengrajin: {item.nama_pengrajin}</p>}
+                          <p className="text-sm text-[#5C5C5C]">{item.spesifikasi}</p>
+                          <p className="text-sm mt-1">Qty Barang Masuk: <strong className="text-[#8B5A2B]">{item.qty_masuk}</strong></p>
                         </div>
-                        {canSeeCraftsman && <p className="text-sm text-[#5C5C5C]">Pengrajin: {item.nama_pengrajin}</p>}
-                        <p className="text-sm text-[#5C5C5C]">{item.spesifikasi}</p>
-                        <p className="text-sm mt-1">Qty Barang Masuk: <strong className="text-[#8B5A2B]">{item.qty_masuk}</strong></p>
                       </div>
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                      {[
-                        { key: "grinda", label: "Grinda", color: "#FFC107" },
-                        { key: "servis", label: "Servis", color: "#2196F3" },
-                        { key: "finishing", label: "Finishing", color: "#9C27B0" },
-                        { key: "packing", label: `Packing/Ready (max ${item.qty_masuk})`, color: "#4CAF50" },
-                      ].map((stage) => (
-                        <div key={stage.key} className="p-3 border border-[#E5E5E5] rounded-md bg-white">
-                          <Label className="text-xs" style={{ color: stage.color }}>{stage.label}</Label>
-                          <Input
-                            type="number"
-                            min={0}
-                            max={item.qty_masuk}
-                            data-testid={`progres-${stage.key}-${poIdx}-${idx}`}
-                            value={item[stage.key] || 0}
-                            onChange={(e) => updateProgres(po.po_id, item.barang_id, stage.key, e.target.value, item.qty_masuk)}
-                            disabled={!canEditPartial}
-                            className="mt-1"
-                          />
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        {STAGES.map((stage) => (
+                          <div key={stage.key} className="p-3 border border-[#E5E5E5] rounded-md bg-white" data-testid={`progres-stage-cell-${stage.key}-${poIdx}-${idx}`}>
+                            <Label className="text-xs" style={{ color: stage.color }}>{stage.label}</Label>
+                            <div className="mt-1 text-2xl font-bold" style={{ color: stage.color }} data-testid={`progres-${stage.key}-${poIdx}-${idx}`}>{item[stage.key] || 0}</div>
+                            <p className="text-xs text-[#5C5C5C]" data-testid={`progres-sisa-${stage.key}-${poIdx}-${idx}`}>Sisa: <strong className="text-[#1A1A1A]">{item[`sisa_${stage.key}`] || 0}</strong></p>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-3 flex justify-end">
+                        <Button variant="ghost" size="sm" onClick={() => toggleHistory(po.po_id, item.barang_id)} data-testid={`toggle-history-${poIdx}-${idx}`} className="text-[#8B5A2B]"><History className="w-3 h-3 mr-1" /> {historyOpen[k] ? "Tutup" : "Lihat"} Riwayat Entry</Button>
+                      </div>
+                      {historyOpen[k] && (
+                        <div className="mt-2 p-3 bg-white rounded-md border border-[#E5E5E5]" data-testid={`history-panel-${poIdx}-${idx}`}>
+                          {!historyMap[k] ? <p className="text-xs text-[#5C5C5C]">Memuat...</p> : historyMap[k].length === 0 ? <p className="text-xs text-[#5C5C5C]">Belum ada entry.</p> : (
+                            <div className="space-y-1">
+                              {historyMap[k].map((e) => (
+                                <div key={e._id} className="flex items-center gap-2 text-sm">
+                                  <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: (STAGES.find(s => s.key === e.stage)?.color || "#8B5A2B") + "22", color: STAGES.find(s => s.key === e.stage)?.color || "#8B5A2B" }}>{e.stage}</span>
+                                  <span className="font-medium">+{e.qty}</span>
+                                  <span className="text-[#5C5C5C]">•</span>
+                                  <span className="text-xs text-[#5C5C5C]"><Calendar className="w-3 h-3 inline mr-0.5" />{e.tanggal}</span>
+                                  {canEditPartial && (
+                                    <Button variant="ghost" size="sm" className="ml-auto text-[#F44336] text-xs h-6 px-2" onClick={() => deleteEntry(e._id, po.po_id, item.barang_id)}>Hapus</Button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      ))}
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </Card>
           ))
