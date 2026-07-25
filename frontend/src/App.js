@@ -13,6 +13,7 @@ import ProgresBarang from "@/pages/ProgresBarang";
 import RekapData from "@/pages/RekapData";
 import Dashboard from "@/pages/Dashboard";
 import UserManagement from "@/pages/UserManagement";
+import ActivityLog from "@/pages/ActivityLog";
 
 function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuth();
@@ -40,6 +41,7 @@ function App() {
               <Route path="progres" element={<ProgresBarang />} />
               <Route path="rekap" element={<RekapData />} />
               <Route path="users" element={<ProtectedRoute roles={["admin"]}><UserManagement /></ProtectedRoute>} />
+              <Route path="activity-log" element={<ProtectedRoute roles={["admin"]}><ActivityLog /></ProtectedRoute>} />
             </Route>
           </Routes>
         </BrowserRouter>

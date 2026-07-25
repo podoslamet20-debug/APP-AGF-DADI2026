@@ -48,6 +48,96 @@ JWT_ALGORITHM = "HS256"
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+# ===== Activity Log Middleware =====
+# Descriptions for common endpoints to make logs readable
+RESOURCE_LABEL = {
+    "barang": "Database Barang",
+    "po": "PO",
+    "barang-masuk": "Barang Masuk",
+    "staffing": "Staffing",
+    "spk": "SPK",
+    "progres": "Progres Barang",
+    "users": "User Management",
+    "user": "User Management",
+    "auth": "Auth",
+    "rekap": "Rekap Data",
+    "upload": "File Upload",
+    "export": "Export",
+    "files": "Files",
+    "activity-log": "Activity Log",
+}
+
+def _decode_token_safe(token: Optional[str]) -> Optional[dict]:
+    if not token: return None
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "access": return None
+        return payload
+    except Exception:
+        return None
+
+
+@app.middleware("http")
+async def activity_log_middleware(request: Request, call_next):
+    # Capture path early
+    method = request.method
+    path = request.url.path
+    response = await call_next(request)
+    try:
+        # Only log successful mutating calls on /api/ (skip GETs, uploads, exports, and the log itself)
+        if (
+            method in ("POST", "PUT", "DELETE", "PATCH")
+            and path.startswith("/api/")
+            and response.status_code < 400
+            and "/activity-log" not in path
+            and "/upload" not in path
+        ):
+            token = request.cookies.get("access_token")
+            if not token:
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    token = auth_header[7:]
+            payload = _decode_token_safe(token)
+            
+            # For login endpoint, response body may include user; but we can't easily read here — login endpoint logs explicitly
+            if path == "/api/auth/login":
+                # skip; handled explicitly in login()
+                return response
+            
+            # Skip logout too (handled explicitly for symmetry)
+            if path == "/api/auth/logout":
+                return response
+            
+            user_id = payload.get("sub", "") if payload else ""
+            user_email = payload.get("email", "") if payload else "anonymous"
+            user_role = payload.get("role", "") if payload else ""
+            
+            # Extract resource + optional id from path
+            parts = path.replace("/api/", "").split("/")
+            resource_key = parts[0] if parts else ""
+            resource_id = parts[1] if len(parts) > 1 else ""
+            action_map = {"POST": "create", "PUT": "update", "DELETE": "delete", "PATCH": "update"}
+            
+            await db.activity_log.insert_one({
+                "user_id": user_id,
+                "user_email": user_email,
+                "user_role": user_role,
+                "action": action_map.get(method, method.lower()),
+                "resource": resource_key,
+                "resource_label": RESOURCE_LABEL.get(resource_key, resource_key),
+                "resource_id": resource_id,
+                "path": path,
+                "method": method,
+                "status_code": response.status_code,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "ip": request.client.host if request.client else "",
+            })
+    except Exception as e:
+        try: logger.warning(f"activity_log middleware error: {e}")
+        except Exception: pass
+    return response
+
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -314,6 +404,11 @@ async def startup_event():
         await db.progres.create_index([("po_id", 1), ("item_id", 1), ("stage", 1)])
         await db.progres.create_index([("tanggal", -1)])
         
+        # Index for activity_log
+        await db.activity_log.create_index([("timestamp", -1)])
+        await db.activity_log.create_index([("user_id", 1)])
+        await db.activity_log.create_index([("resource", 1)])
+        
         # Rebalance legacy progres: for each PO+barang, ensure downstream stage sums ≤ upstream.
         # Guarded by a marker doc in db.migrations so it only runs once per DB.
         try:
@@ -376,29 +471,41 @@ async def startup_event():
 
 # ===== Auth Routes =====
 @api_router.post("/auth/login")
-async def login(request: LoginRequest, response: Response):
+async def login(request: LoginRequest, req: Request, response: Response):
     user = await db.users.find_one({"email": request.email.lower()})
     if not user or not verify_password(request.password, user["password_hash"]):
+        # Log failed attempt
+        try:
+            await db.activity_log.insert_one({
+                "user_id": "", "user_email": request.email.lower(), "user_role": "",
+                "action": "login_failed", "resource": "auth", "resource_label": "Auth",
+                "resource_id": "", "path": "/api/auth/login", "method": "POST",
+                "status_code": 401, "timestamp": datetime.now(timezone.utc).isoformat(),
+                "ip": req.client.host if req.client else "",
+            })
+        except Exception: pass
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
     user_id = str(user["_id"])
     token = create_access_token(user_id, user["email"], user["role"])
     response.set_cookie(
-        key="access_token",
-        value=token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=86400,
-        path="/"
+        key="access_token", value=token, httponly=True, secure=True,
+        samesite="none", max_age=86400, path="/"
     )
     
-    return {
-        "_id": user_id,
-        "email": user["email"],
-        "name": user["name"],
-        "role": user["role"]
-    }
+    # Log successful login
+    try:
+        await db.activity_log.insert_one({
+            "user_id": user_id, "user_email": user["email"], "user_role": user["role"],
+            "action": "login", "resource": "auth", "resource_label": "Auth",
+            "resource_id": user_id, "path": "/api/auth/login", "method": "POST",
+            "status_code": 200, "timestamp": datetime.now(timezone.utc).isoformat(),
+            "ip": req.client.host if req.client else "",
+            "detail": f"{user['name']} ({user['role']}) login",
+        })
+    except Exception: pass
+    
+    return {"_id": user_id, "email": user["email"], "name": user["name"], "role": user["role"]}
 
 @api_router.get("/auth/me")
 async def get_me(request: Request):
@@ -406,7 +513,21 @@ async def get_me(request: Request):
     return user
 
 @api_router.post("/auth/logout")
-async def logout(response: Response):
+async def logout(request: Request, response: Response):
+    # Log logout
+    try:
+        token = request.cookies.get("access_token")
+        payload = _decode_token_safe(token)
+        if payload:
+            await db.activity_log.insert_one({
+                "user_id": payload.get("sub", ""), "user_email": payload.get("email", ""),
+                "user_role": payload.get("role", ""), "action": "logout",
+                "resource": "auth", "resource_label": "Auth", "resource_id": "",
+                "path": "/api/auth/logout", "method": "POST", "status_code": 200,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "ip": request.client.host if request.client else "",
+            })
+    except Exception: pass
     response.delete_cookie("access_token", path="/")
     return {"message": "Logged out successfully"}
 

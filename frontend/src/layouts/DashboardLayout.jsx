@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Package, Home, ShoppingCart, PackageOpen, Truck, FileText, TrendingUp, BarChart3, LogOut, Menu, X, User, Users } from "lucide-react";
+import { Package, Home, ShoppingCart, PackageOpen, Truck, FileText, TrendingUp, BarChart3, LogOut, Menu, X, User, Users, History } from "lucide-react";
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: Home, testId: "nav-dashboard" },
@@ -14,6 +14,7 @@ const navItems = [
   { path: "/progres", label: "Progres Barang", icon: TrendingUp, testId: "nav-progres", roles: ["admin", "staff", "guest"] },
   { path: "/rekap", label: "Rekap Data", icon: BarChart3, testId: "nav-rekap", roles: ["admin", "staff", "guest"] },
   { path: "/users", label: "User Management", icon: Users, testId: "nav-users", roles: ["admin"] },
+  { path: "/activity-log", label: "Activity Log", icon: History, testId: "nav-activity-log", roles: ["admin"] },
 ];
 
 export default function DashboardLayout() {

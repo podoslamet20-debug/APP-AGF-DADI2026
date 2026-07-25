@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="9" skipped="0" tests="11" time="2.326" timestamp="2026-07-25T08:54:34.037598+00:00" hostname="agent-env-502d5fd0-1c5b-4454-bca0-e1c08823ca6b"><testcase classname="tests.test_iter11.TestRegressionIter10" name="test_barang_list_works" time="0.649" /><testcase classname="tests.test_iter11.TestActivityLogEndpoints" name="test_get_activity_log_exists" time="0.651"><failure message="AssertionError: GET /api/activity-log missing (got 404): {&quot;detail&quot;:&quot;Not Found&quot;}&#10;assert 404 == 200&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/test_iter11.py:40: in test_get_activity_log_exists
+    assert r.status_code == 200, f"GET /api/activity-log missing (got {r.status_code}): {r.text[:200]}"
+E   AssertionError: GET /api/activity-log missing (got 404): {"detail":"Not Found"}
+E   assert 404 == 200
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.test_iter11.TestRegressionIter10" name="test_po_list_works" time="0.046" /><testcase classname="tests.test_iter11.TestRegressionIter10" name="test_progres_summary_works" time="0.045"><failure message="assert 405 == 200&#10; +  where 405 = &lt;Response [405]&gt;.status_code">backend/tests/test_iter11.py:121: in test_progres_summary_works
+    assert r.status_code == 200
+E   assert 405 == 200
+E    +  where 405 = &lt;Response [405]&gt;.status_code</failure></testcase><testcase classname="tests.test_iter11.TestAuthLogging" name="test_login_creates_log_entry" time="0.242"><failure message="assert 404 == 200&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/test_iter11.py:64: in test_login_creates_log_entry
+    assert r.status_code == 200
+E   assert 404 == 200
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.test_iter11.TestActivityLogEndpoints" name="test_get_activity_log_forbidden_for_staff" time="0.372"><failure message="AssertionError: expected 403 got 404&#10;assert 404 == 403&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/test_iter11.py:45: in test_get_activity_log_forbidden_for_staff
+    assert r.status_code == 403, f"expected 403 got {r.status_code}"
+E   AssertionError: expected 403 got 404
+E   assert 404 == 403
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.test_iter11.TestAuthLogging" name="test_failed_login_creates_log_entry" time="0.567"><failure message="assert 404 == 200&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/test_iter11.py:72: in test_failed_login_creates_log_entry
+    assert r.status_code == 200
+E   assert 404 == 200
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.test_iter11.TestActivityLogEndpoints" name="test_get_activity_log_forbidden_for_guest" time="0.602"><failure message="assert 404 == 403&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/test_iter11.py:49: in test_get_activity_log_forbidden_for_guest
+    assert r.status_code == 403
+E   assert 404 == 403
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.test_iter11.TestMutationMiddleware" name="test_barang_crud_creates_log_entries" time="0.254"><failure message="assert 404 == 200&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/test_iter11.py:99: in test_barang_crud_creates_log_entries
+    assert r.status_code == 200
+E   assert 404 == 200
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.test_iter11.TestActivityLogEndpoints" name="test_purge_requires_before_param" time="0.044"><failure message="AssertionError: expected 400 got 404&#10;assert 404 == 400&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/test_iter11.py:53: in test_purge_requires_before_param
+    assert r.status_code == 400, f"expected 400 got {r.status_code}"
+E   AssertionError: expected 400 got 404
+E   assert 404 == 400
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.test_iter11.TestActivityLogEndpoints" name="test_purge_forbidden_for_staff" time="0.048"><failure message="assert 404 == 403&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/test_iter11.py:57: in test_purge_forbidden_for_staff
+    assert r.status_code == 403
+E   assert 404 == 403
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase></testsuite></testsuites>

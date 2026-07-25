@@ -1,0 +1,37 @@
+{
+  "summary": "Iter11 Activity Log audit trail: middleware auto-logging (POST/PUT/DELETE) + explicit login/logout/login_failed logging work correctly and rows land in db.activity_log with correct action, resource, resource_label, user_email, IP, timestamp. Frontend nav gating (admin-only) works and page renders. CRITICAL: GET /api/activity-log and DELETE /api/activity-log/purge endpoints are MISSING from server.py entirely - both return 404 - so the Activity Log page always shows 'Gagal load activity log: Not Found' toast with empty table. This is exactly the bug the review note warned about (endpoints originally placed after app.include_router). The 'now fixed' claim in the agent-to-agent note is INCORRECT - endpoints were removed but not re-added.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/activity-log", "issue": "Endpoint is completely missing from server.py. Returns 404. Middleware logs entries into db.activity_log fine, but there is no read endpoint. Frontend page cannot display any data. Must be added BEFORE the `app.include_router(api_router)` line at server.py:2228.", "priority": "CRITICAL"},
+      {"endpoint": "DELETE /api/activity-log/purge", "issue": "Endpoint is completely missing from server.py. Returns 404. Purge button in UI cannot work. Must be added to api_router before include_router. Expected: admin-only, 400 when `before` missing, 403 for staff/guest.", "priority": "CRITICAL"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Activity Log page load", "issue": "Toast 'Gagal load activity log: Not Found' shown because GET /api/activity-log returns 404. Empty state (Belum ada activity log) always displayed. Blocked by backend missing endpoints.", "affected_selectors": ["[data-testid=activity-log-page]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter11.py", "/app/test_reports/pytest/iter11.xml"],
+  "action_items": [
+    "URGENT: Add GET /api/activity-log endpoint on api_router with admin-only guard, supporting query params action, resource, user_id, date_from, date_to, limit (default 500, max 2000). Sort by timestamp DESC. Exclude/stringify Mongo _id.",
+    "URGENT: Add DELETE /api/activity-log/purge?before=YYYY-MM-DD on api_router (admin-only). Return 400 if `before` missing, 403 for non-admin. Return {deleted: <count>}.",
+    "Ensure both endpoints are declared BEFORE `app.include_router(api_router)` (server.py:2228). Current file has NO occurrence of these routes."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 2241 lines - should be split into routers (auth.py, barang.py, po.py, activity_log.py, etc.) per <=700 lines guideline.",
+    "Activity log entries include Mongo _id (ObjectId); when GET endpoint is added ensure _id is stringified or excluded to avoid JSON serialization errors.",
+    "Middleware reads request.client.host directly - behind ingress this often shows internal LB IP. Consider X-Forwarded-For header.",
+    "Middleware skips /api/upload but not /api/export - export endpoints (POST for PDF/Excel) would be logged as create; may be intentional or noise."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter11.py"],
+  "success_rate": {"backend": "20% (2/11 - only regression list endpoints pass, all activity-log tests fail)", "frontend": "60% (nav gating + page render OK; data load blocked)"},
+  "test_credentials": "admin@agfdata.com/admin123, staff@agfdata.com/staff123, tamu@agfdata.com/tamu123 - all verified working",
+  "seed_data_creation": "None. 3 login logs + 1 failed login + 1 logout + 3 barang mutation logs were generated during testing (a TEST_iter11_log barang was created→updated→deleted; deletion cascade cleaned it).",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "After main agent adds GET /api/activity-log and DELETE /api/activity-log/purge, re-run `pytest /app/backend/tests/test_iter11.py -v`. All 9 currently-failing tests should pass. Also re-test filters end-to-end via UI (action/resource/user/date_from/date_to) and the purge button prompt.",
+  "rca_of_the_issue": "The two admin endpoints (`@api_router.get('/activity-log')` and `@api_router.delete('/activity-log/purge')`) referenced in the review request at 'line ~2228-2270' do NOT exist in the current server.py. `grep -n activity /app/backend/server.py` shows only middleware + login/logout inserts. The file ends at line 2241 with `app.include_router(api_router)` and CORS setup - no route definitions in between. Reproduction: `curl -b <cookie> $BASE/api/activity-log` -> 404 Not Found. Mitigation: Main agent must add both endpoints on api_router before include_router, with admin-role guard, filter query params, and ObjectId-safe serialization."
+}
