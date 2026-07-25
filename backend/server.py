@@ -315,49 +315,49 @@ async def startup_event():
         await db.progres.create_index([("tanggal", -1)])
         
         # Rebalance legacy progres: for each PO+barang, ensure downstream stage sums ≤ upstream.
-        # If inconsistent (from pre-pipeline data), reduce qty of MOST RECENT entry at excess stage.
+        # Guarded by a marker doc in db.migrations so it only runs once per DB.
         try:
-            pipeline = [
-                {"$match": {"stage": {"$in": VALID_STAGES}}},
-                {"$group": {"_id": {"po_id": "$po_id", "item_id": "$item_id", "stage": "$stage"}, "total": {"$sum": "$qty"}}},
-            ]
-            grouped: Dict[tuple, Dict[str, int]] = {}
-            async for r in db.progres.aggregate(pipeline):
-                _id = r["_id"]
-                k = (_id.get("po_id", ""), _id.get("item_id", ""))
-                grouped.setdefault(k, {s: 0 for s in VALID_STAGES})
-                grouped[k][_id["stage"]] = int(r.get("total", 0) or 0)
-            
-            rebalanced = 0
-            for (po_id, item_id), stage_sums in grouped.items():
-                # Compute qty_masuk for this PO+barang
-                qty_masuk = 0
-                if po_id:
-                    async for bm in db.barang_masuk.find({"po_id": po_id}):
-                        for it in bm.get("items", []):
-                            if it.get("barang_id") == item_id:
-                                qty_masuk += it.get("qty_diterima", 0) or 0
+            marker = await db.migrations.find_one({"name": "progres_rebalance_v1"})
+            if marker:
+                logger.info("Progres rebalance already applied (skipping).")
+            else:
+                pipeline = [
+                    {"$match": {"stage": {"$in": VALID_STAGES}}},
+                    {"$group": {"_id": {"po_id": "$po_id", "item_id": "$item_id", "stage": "$stage"}, "total": {"$sum": "$qty"}}},
+                ]
+                grouped: Dict[tuple, Dict[str, int]] = {}
+                async for r in db.progres.aggregate(pipeline):
+                    _id = r["_id"]
+                    k = (_id.get("po_id", ""), _id.get("item_id", ""))
+                    grouped.setdefault(k, {s: 0 for s in VALID_STAGES})
+                    grouped[k][_id["stage"]] = int(r.get("total", 0) or 0)
                 
-                # Check each stage downstream
-                for stage in VALID_STAGES:
-                    upstream = qty_masuk if stage == "grinda" else stage_sums[PREV_STAGE[stage]]
-                    excess = stage_sums[stage] - upstream
-                    if excess > 0:
-                        # Reduce most recent entries at this stage until sum <= upstream
-                        remaining = excess
-                        async for e in db.progres.find({"po_id": po_id, "item_id": item_id, "stage": stage}).sort([("created_at", -1)]):
-                            if remaining <= 0: break
-                            eq = int(e.get("qty", 0) or 0)
-                            if eq <= remaining:
-                                await db.progres.delete_one({"_id": e["_id"]})
-                                remaining -= eq
-                            else:
-                                await db.progres.update_one({"_id": e["_id"]}, {"$set": {"qty": eq - remaining, "rebalanced": True}})
-                                remaining = 0
-                        stage_sums[stage] = upstream
-                        rebalanced += 1
-            if rebalanced > 0:
-                logger.info(f"Progres rebalance: fixed {rebalanced} inconsistent PO+barang stage sums (legacy pre-pipeline).")
+                rebalanced = 0
+                for (po_id, item_id), stage_sums in grouped.items():
+                    qty_masuk = 0
+                    if po_id:
+                        async for bm in db.barang_masuk.find({"po_id": po_id}):
+                            for it in bm.get("items", []):
+                                if it.get("barang_id") == item_id:
+                                    qty_masuk += it.get("qty_diterima", 0) or 0
+                    for stage in VALID_STAGES:
+                        upstream = qty_masuk if stage == "grinda" else stage_sums[PREV_STAGE[stage]]
+                        excess = stage_sums[stage] - upstream
+                        if excess > 0:
+                            remaining = excess
+                            async for e in db.progres.find({"po_id": po_id, "item_id": item_id, "stage": stage}).sort([("created_at", -1)]):
+                                if remaining <= 0: break
+                                eq = int(e.get("qty", 0) or 0)
+                                if eq <= remaining:
+                                    await db.progres.delete_one({"_id": e["_id"]})
+                                    remaining -= eq
+                                else:
+                                    await db.progres.update_one({"_id": e["_id"]}, {"$set": {"qty": eq - remaining, "rebalanced": True}})
+                                    remaining = 0
+                            stage_sums[stage] = upstream
+                            rebalanced += 1
+                await db.migrations.insert_one({"name": "progres_rebalance_v1", "ran_at": datetime.now(timezone.utc).isoformat(), "groups_fixed": rebalanced})
+                logger.info(f"Progres rebalance v1 applied: fixed {rebalanced} inconsistent PO+barang stage sums.")
         except Exception as e:
             logger.error(f"Progres rebalance error: {e}")
         

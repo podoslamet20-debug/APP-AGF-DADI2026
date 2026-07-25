@@ -16,6 +16,14 @@ Aplikasi rekap data barang furniture "AGFDATA" - Database Barang, PO, Barang Mas
 
 ## Implementation Log
 
+### Iteration 10 (Feb 2026) - Komplit Notifications + Progres Edit + Rekap Sync + Legacy Rebalance
+- **BarangMasuk KOMPLIT badge**: card shows "KOMPLIT PO" when `sum(qty_diterima) >= sum(qty)` across all PO items; per-item "KOMPLIT" badge when `qty_diterima >= qty`; qty label now shows `X / total_po` for clarity
+- **Staffing KOMPLIT TERKIRIM badge**: card shows badge when `sum(qty_staffed) >= sum(qty)` across PO; per-item KOMPLIT + `X / total_po` label
+- **Progres Barang edit entry**: new `PUT /api/progres/{entry_id}` with pipeline validation excluding self (`sums - own_old_qty`); frontend Edit button per entry in history panel; dialog title switches to "Edit Entry Progres"
+- **Progres PDF export**: now aggregates stage entries via `$group`, includes **Tanggal** column, `tanggal` filter shows entries dated on that day only
+- **Rekap Progres sync**: `/api/rekap/progres` rebuilt to aggregate from stage entries (previously read from legacy cumulative docs → showed zeros). Returns `sisa_grinda/servis/finishing/packing` + `tanggal_terakhir`. Frontend table shows Tanggal + sisa row-under-value per stage; Excel/CSV export includes all sisa columns
+- **Legacy rebalance on startup**: idempotent script that walks each PO+barang, detects downstream > upstream inconsistencies, and reduces qty of most-recent entries at excess stages until sums are pipeline-consistent. Ran once and fixed 41 groups.
+
 ### Iteration 9 (Feb 2026) - Progres Barang stage-entry model + backlog cleanup
 - **PROGRES BARANG rebuilt** as per-date, per-stage entry log (each POST creates a new record, no more upsert):
   - `POST /api/progres` accepts `{po_id, item_id, stage, qty, tanggal, ...meta}`; validates pipeline: grinda ≤ (qty_masuk − grinda_sum); servis ≤ (grinda_sum − servis_sum); finishing ≤ (servis_sum − finishing_sum); packing ≤ (finishing_sum − packing_sum); returns HTTP 400 with descriptive Indonesian error including current sisa
