@@ -28,6 +28,7 @@ export default function ProgresBarang() {
   const [manual, setManual] = useState(false);
   const [historyMap, setHistoryMap] = useState({}); // key: `${po_id}_${item_id}` -> [entries]
   const [historyOpen, setHistoryOpen] = useState({}); // key -> boolean
+  const [editEntryId, setEditEntryId] = useState(null);
   const initialForm = {
     po_id: "",
     item_id: "",
@@ -107,18 +108,37 @@ export default function ProgresBarang() {
       payload.gambar_path = form.gambar_path;
     }
     try {
-      const { data } = await axios.post(`${API}/progres`, payload);
+      const url = editEntryId ? `${API}/progres/${editEntryId}` : `${API}/progres`;
+      const method = editEntryId ? 'put' : 'post';
+      const { data } = await axios[method](url, payload);
       const sisa = data.sisa_setelah_input;
-      toast.success(sisa != null ? `Progres ${form.stage} +${form.qty} disimpan. Sisa ${form.stage}: ${sisa}` : `Progres ${form.stage} +${form.qty} disimpan.`);
+      toast.success(sisa != null ? `Entry ${form.stage} ${editEntryId ? 'diupdate' : '+' + form.qty + ' disimpan'}. Sisa: ${sisa}` : `Entry ${editEntryId ? 'diupdate' : 'disimpan'}.`);
       setOpen(false);
       setManual(false);
+      setEditEntryId(null);
       setForm(initialForm);
-      // Invalidate any open history
       setHistoryMap({});
       load();
     } catch (e) {
       toast.error("Gagal simpan: " + (e.response?.data?.detail || e.message));
     }
+  };
+
+  const startEditEntry = (entry) => {
+    setEditEntryId(entry._id);
+    setManual(!entry.po_id);
+    setForm({
+      po_id: entry.po_id || "",
+      item_id: entry.item_id,
+      stage: entry.stage,
+      qty: entry.qty,
+      tanggal: entry.tanggal || new Date().toISOString().slice(0, 10),
+      nama_barang: entry.nama_barang || "",
+      nama_pengrajin: entry.nama_pengrajin || "",
+      spesifikasi: entry.spesifikasi || "",
+      gambar_path: entry.gambar_path || "",
+    });
+    setOpen(true);
   };
 
   const deleteEntry = async (entryId, poId, itemId) => {
@@ -175,7 +195,7 @@ export default function ProgresBarang() {
               </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
-                  <DialogTitle>Tambah Entry Progres</DialogTitle>
+                  <DialogTitle>{editEntryId ? "Edit Entry Progres" : "Tambah Entry Progres"}</DialogTitle>
                   <DialogDescription>Setiap input jadi entry baru dengan tanggal & stage. Qty otomatis dibatasi oleh sisa dari stage sebelumnya.</DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4">
@@ -342,7 +362,10 @@ export default function ProgresBarang() {
                                   <span className="text-[#5C5C5C]">•</span>
                                   <span className="text-xs text-[#5C5C5C]"><Calendar className="w-3 h-3 inline mr-0.5" />{e.tanggal}</span>
                                   {canEditPartial && (
-                                    <Button variant="ghost" size="sm" className="ml-auto text-[#F44336] text-xs h-6 px-2" onClick={() => deleteEntry(e._id, po.po_id, item.barang_id)}>Hapus</Button>
+                                    <div className="ml-auto flex gap-1">
+                                      <Button variant="ghost" size="sm" className="text-[#2196F3] text-xs h-6 px-2" onClick={() => startEditEntry(e)} data-testid={`edit-entry-${e._id}`}>Edit</Button>
+                                      <Button variant="ghost" size="sm" className="text-[#F44336] text-xs h-6 px-2" onClick={() => deleteEntry(e._id, po.po_id, item.barang_id)}>Hapus</Button>
+                                    </div>
                                   )}
                                 </div>
                               ))}

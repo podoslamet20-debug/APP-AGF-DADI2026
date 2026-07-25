@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, Truck, Package, Search, Trash2, Edit, Eye, Download, Printer } from "lucide-react";
+import { Plus, Truck, Package, Search, Trash2, Edit, Eye, Download, Printer, CheckCircle2 } from "lucide-react";
 
 export default function Staffing() {
   const { API, canEditPartial, canSeeCraftsman } = useAuth();
@@ -215,11 +215,20 @@ export default function Staffing() {
             <p className="text-[#5C5C5C]">Belum ada data staffing.</p>
           </Card>
         ) : (
-          items.map((st, idx) => (
+          items.map((st, idx) => {
+            const po = pos.find(p => (p._id || p.id) === st.po_id);
+            const poItems = po?.items || [];
+            const totalPO = poItems.reduce((s, i) => s + (i.qty || 0), 0);
+            const totalStaffed = poItems.reduce((s, i) => s + (i.qty_staffed || 0), 0);
+            const poKomplit = totalPO > 0 && totalStaffed >= totalPO;
+            return (
             <Card key={idx} className="p-6 border border-[#E5E5E5]" data-testid={`staffing-card-${idx}`}>
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
                 <div>
-                  <h3 className="text-lg font-bold text-[#1A1A1A]">{st.no_po}</h3>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-lg font-bold text-[#1A1A1A]">{st.no_po}</h3>
+                    {poKomplit && <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-[#4CAF50] text-white rounded-full" data-testid={`staffing-komplit-po-${idx}`}><CheckCircle2 className="w-3 h-3" /> KOMPLIT TERKIRIM</span>}
+                  </div>
                   <p className="text-sm text-[#5C5C5C]">Tanggal Keluar: {st.tanggal_keluar}</p>
                 </div>
                 <div className="flex gap-2 flex-wrap">
@@ -246,19 +255,26 @@ export default function Staffing() {
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {st.items?.map((item, ii) => (
+                {st.items?.map((item, ii) => {
+                  const poItem = poItems.find(pi => pi.barang_id === item.barang_id);
+                  const itemKomplit = poItem && (poItem.qty_staffed || 0) >= (poItem.qty || 0) && (poItem.qty || 0) > 0;
+                  return (
                   <div key={ii} className="flex gap-3 p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]">
                     {item.gambar_path ? <img src={`${API}/files/${item.gambar_path}`} className="w-14 h-14 object-cover rounded" alt="" /> : <div className="w-14 h-14 bg-[#F0E6D6] rounded flex items-center justify-center"><Package className="w-5 h-5 text-[#8B5A2B]" /></div>}
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">{item.nama_barang}</p>
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <p className="font-medium text-sm truncate">{item.nama_barang}</p>
+                        {itemKomplit && <span className="text-[10px] px-1 py-0 bg-[#4CAF50] text-white rounded" data-testid={`staffing-item-komplit-${idx}-${ii}`}>KOMPLIT</span>}
+                      </div>
                       {canSeeCraftsman && <p className="text-xs text-[#5C5C5C] truncate">{item.nama_pengrajin}</p>}
-                      <span className="text-xs px-1.5 py-0.5 bg-[#2196F3] text-white rounded inline-block mt-1">Keluar: {item.qty}</span>
+                      <span className="text-xs px-1.5 py-0.5 bg-[#2196F3] text-white rounded inline-block mt-1">Keluar: {item.qty}{poItem ? ` / ${poItem.qty}` : ''}</span>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </Card>
-          ))
+          )})
         )}
       </div>
 

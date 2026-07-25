@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, PackageOpen, Download, Package, Search, Trash2, Edit, Eye, Printer } from "lucide-react";
+import { Plus, PackageOpen, Download, Package, Search, Trash2, Edit, Eye, Printer, CheckCircle2 } from "lucide-react";
 
 export default function BarangMasuk() {
   const { API, canEditPartial, canSeeCraftsman } = useAuth();
@@ -229,11 +229,20 @@ export default function BarangMasuk() {
             <p className="text-[#5C5C5C]">Belum ada data barang masuk.</p>
           </Card>
         ) : (
-          items.map((bm, idx) => (
+          items.map((bm, idx) => {
+            const po = pos.find(p => (p._id || p.id) === bm.po_id);
+            const poItems = po?.items || [];
+            const totalPO = poItems.reduce((s, i) => s + (i.qty || 0), 0);
+            const totalDiterima = poItems.reduce((s, i) => s + (i.qty_diterima || 0), 0);
+            const poKomplit = totalPO > 0 && totalDiterima >= totalPO;
+            return (
             <Card key={idx} className="p-6 border border-[#E5E5E5]" data-testid={`bm-card-${idx}`}>
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
                 <div>
-                  <h3 className="text-lg font-bold text-[#1A1A1A]">{bm.no_po}</h3>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-lg font-bold text-[#1A1A1A]">{bm.no_po}</h3>
+                    {poKomplit && <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-[#4CAF50] text-white rounded-full" data-testid={`bm-komplit-po-${idx}`}><CheckCircle2 className="w-3 h-3" /> KOMPLIT PO</span>}
+                  </div>
                   <p className="text-sm text-[#5C5C5C]">Tanggal: {bm.tanggal_masuk} • Penerima: {bm.penerima}</p>
                 </div>
                 <div className="flex gap-2 flex-wrap">
@@ -260,19 +269,26 @@ export default function BarangMasuk() {
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {bm.items?.map((item, ii) => (
+                {bm.items?.map((item, ii) => {
+                  const poItem = poItems.find(pi => pi.barang_id === item.barang_id);
+                  const itemKomplit = poItem && (poItem.qty_diterima || 0) >= (poItem.qty || 0) && (poItem.qty || 0) > 0;
+                  return (
                   <div key={ii} className="flex gap-3 p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]">
                     {item.gambar_path ? <img src={`${API}/files/${item.gambar_path}`} className="w-14 h-14 object-cover rounded" alt="" /> : <div className="w-14 h-14 bg-[#F0E6D6] rounded flex items-center justify-center"><Package className="w-5 h-5 text-[#8B5A2B]" /></div>}
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">{item.nama_barang}</p>
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <p className="font-medium text-sm truncate">{item.nama_barang}</p>
+                        {itemKomplit && <span className="text-[10px] px-1 py-0 bg-[#4CAF50] text-white rounded" data-testid={`bm-item-komplit-${idx}-${ii}`}>KOMPLIT</span>}
+                      </div>
                       {canSeeCraftsman && <p className="text-xs text-[#5C5C5C] truncate">{item.nama_pengrajin}</p>}
-                      <span className="text-xs px-1.5 py-0.5 bg-[#4CAF50] text-white rounded inline-block mt-1">Diterima: {item.qty_diterima}</span>
+                      <span className="text-xs px-1.5 py-0.5 bg-[#4CAF50] text-white rounded inline-block mt-1">Diterima: {item.qty_diterima}{poItem ? ` / ${poItem.qty}` : ''}</span>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </Card>
-          ))
+          )})
         )}
       </div>
 

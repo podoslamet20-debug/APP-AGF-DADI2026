@@ -1,0 +1,31 @@
+{
+  "summary": "Iter10 tested end-to-end. Backend PUT /api/progres/{id} own_old subtraction works; rebalance log confirmed (41 groups fixed); /api/rekap/progres now returns tanggal_terakhir + sisa_* fields and has 0 inconsistent rows; PDF export ok (both unfiltered and ?tanggal=). Frontend Rekap Progres tab shows correct new schema (Tanggal Update + 4 stage columns w/ sisa + Status). N10036 napeleon row = 400/310/310/310/310 matching /progres page. BM per-item KOMPLIT badge shows for napeleon (400/400). Staffing per-item KOMPLIT visible. Progres edit-entry button + dialog title 'Edit Entry Progres' work with 8 edit buttons visible. 8/9 pytest passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter10.py", "/app/test_reports/pytest/iter10.xml"],
+  "action_items": [
+    "REVIEW REQUEST DATA MISMATCH (not a bug): Review claims 'N10036 has 20/20 kopitiam' but actual DB has kopitiam qty_diterima=20 vs PO qty=50 (kurang kirim=30). Consequently N10036 does NOT show the 'KOMPLIT PO' card-level badge, and this is CORRECT behaviour of the code. Only napeleon (400/400) shows the per-item KOMPLIT sub-badge. If main agent expected N10036 PO to be komplit, either seed additional BM for kopitiam (30 more) OR reduce PO kopitiam qty to 20.",
+    "Legacy TEST_ITER7/ITER8/ITER9 seed data still present in DB; consider a one-time cleanup (they clutter BM list and rekap tables).",
+    "N10036 Kopitiam row shows Status 'PROSES' with all stage sums = 0 (no progres entries yet) — visually fine."
+  ],
+  "critical_code_review_comments": [
+    "server.py has grown to ~2120 lines - consider modularising (progres, rekap, export routers) - file exceeds 700 line guideline",
+    "PUT /api/progres/{entry_id} requires full ProgresEntry payload (po_id + item_id + stage + qty + tanggal); UI must pass all fields - verified working, but a partial-update PATCH would be more RESTful",
+    "Rebalance migration runs on every startup - idempotent but adds latency; consider guarding with a flag document once done"
+  ],
+  "updated_files": ["/app/backend/tests/test_iter10.py"],
+  "success_rate": {"backend": "89% (8/9, single failure is a request-vs-reality data mismatch not a code bug)", "frontend": "100%"},
+  "test_credentials": "admin@agfdata.com / admin123",
+  "seed_data_creation": "TEST_ITER10_* barang/PO/BM created and auto-cleaned by test_zzz_cleanup",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter10 features shipped OK: (1) BM/Staffing KOMPLIT badges (card + per-item), (2) Progres edit-entry PUT with own_old and UI dialog, (3) PDF export with Tanggal column + tanggal filter, (4) Rekap Progres real stage sums + sisa columns + Tanggal Update, (5) Legacy rebalance ran (41 fixed). N10036 napeleon: masuk=400 grinda=310 servis=310 finishing=310 packing=310 (all consistent). N10036 kopitiam is 20 masuk (only, no progres). PUT /api/progres/{id} requires full ProgresEntry body (po_id+item_id+stage+qty+tanggal).",
+  "rca of the issue": "The single pytest failure (TestBMKomplitData.test_n10036_qty_diterima_full) is due to a mismatch between the review request statement ('20/20 kopitiam') and actual DB data (20/50 kopitiam). The BM UI code correctly gates 'KOMPLIT PO' on totalDiterima>=totalPO across all PO items, so it will only appear when ALL items reach their PO qty — which N10036 currently does not. Fix path: either add BM entry for 30 more kopitiam units, or lower kopitiam PO qty from 50 to 20."
+}

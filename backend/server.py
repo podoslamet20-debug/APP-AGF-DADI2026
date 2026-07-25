@@ -314,6 +314,53 @@ async def startup_event():
         await db.progres.create_index([("po_id", 1), ("item_id", 1), ("stage", 1)])
         await db.progres.create_index([("tanggal", -1)])
         
+        # Rebalance legacy progres: for each PO+barang, ensure downstream stage sums ≤ upstream.
+        # If inconsistent (from pre-pipeline data), reduce qty of MOST RECENT entry at excess stage.
+        try:
+            pipeline = [
+                {"$match": {"stage": {"$in": VALID_STAGES}}},
+                {"$group": {"_id": {"po_id": "$po_id", "item_id": "$item_id", "stage": "$stage"}, "total": {"$sum": "$qty"}}},
+            ]
+            grouped: Dict[tuple, Dict[str, int]] = {}
+            async for r in db.progres.aggregate(pipeline):
+                _id = r["_id"]
+                k = (_id.get("po_id", ""), _id.get("item_id", ""))
+                grouped.setdefault(k, {s: 0 for s in VALID_STAGES})
+                grouped[k][_id["stage"]] = int(r.get("total", 0) or 0)
+            
+            rebalanced = 0
+            for (po_id, item_id), stage_sums in grouped.items():
+                # Compute qty_masuk for this PO+barang
+                qty_masuk = 0
+                if po_id:
+                    async for bm in db.barang_masuk.find({"po_id": po_id}):
+                        for it in bm.get("items", []):
+                            if it.get("barang_id") == item_id:
+                                qty_masuk += it.get("qty_diterima", 0) or 0
+                
+                # Check each stage downstream
+                for stage in VALID_STAGES:
+                    upstream = qty_masuk if stage == "grinda" else stage_sums[PREV_STAGE[stage]]
+                    excess = stage_sums[stage] - upstream
+                    if excess > 0:
+                        # Reduce most recent entries at this stage until sum <= upstream
+                        remaining = excess
+                        async for e in db.progres.find({"po_id": po_id, "item_id": item_id, "stage": stage}).sort([("created_at", -1)]):
+                            if remaining <= 0: break
+                            eq = int(e.get("qty", 0) or 0)
+                            if eq <= remaining:
+                                await db.progres.delete_one({"_id": e["_id"]})
+                                remaining -= eq
+                            else:
+                                await db.progres.update_one({"_id": e["_id"]}, {"$set": {"qty": eq - remaining, "rebalanced": True}})
+                                remaining = 0
+                        stage_sums[stage] = upstream
+                        rebalanced += 1
+            if rebalanced > 0:
+                logger.info(f"Progres rebalance: fixed {rebalanced} inconsistent PO+barang stage sums (legacy pre-pipeline).")
+        except Exception as e:
+            logger.error(f"Progres rebalance error: {e}")
+        
         # Migration: clean legacy progres records with empty po_id
         try:
             legacy = await db.progres.count_documents({"po_id": ""})
@@ -918,6 +965,70 @@ async def get_progres_entries(po_id: Optional[str] = None, item_id: Optional[str
     return entries
 
 
+@api_router.put("/progres/{entry_id}")
+async def update_progres_entry(entry_id: str, entry: ProgresEntry, user: dict = Depends(get_current_user)):
+    """Update an existing progres entry (qty/tanggal/stage). Pipeline validation excludes self."""
+    if user["role"] not in ["admin", "staff"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if entry.stage not in VALID_STAGES:
+        raise HTTPException(status_code=400, detail=f"Stage tidak valid. Pilih: {', '.join(VALID_STAGES)}")
+    
+    old = await db.progres.find_one({"_id": ObjectId(entry_id)})
+    if not old:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    
+    po_id = entry.po_id or ""
+    is_manual = not po_id
+    
+    # Compute stage sums MINUS own old contribution (so edit doesn't double-count)
+    if is_manual:
+        sums = await _get_stage_sums("", entry.item_id) if entry.item_id else {s: 0 for s in VALID_STAGES}
+        qty_masuk = 0
+    else:
+        sums = await _get_stage_sums(po_id, entry.item_id)
+        qty_masuk = await _get_qty_masuk(po_id, entry.item_id)
+    
+    # Subtract own old qty from its old stage
+    old_stage = old.get("stage")
+    old_qty = int(old.get("qty", 0) or 0)
+    if old_stage in sums:
+        sums[old_stage] = max(0, sums[old_stage] - old_qty)
+    
+    # Now validate new entry against updated sums
+    if entry.stage == "grinda":
+        upstream = qty_masuk if not is_manual else float('inf')
+        upstream_label = "Barang Masuk"
+    else:
+        prev = PREV_STAGE[entry.stage]
+        upstream = sums[prev]
+        upstream_label = prev.capitalize()
+    already_at_stage = sums[entry.stage]
+    sisa_before = (upstream - already_at_stage) if upstream != float('inf') else float('inf')
+    
+    if not is_manual and entry.qty > sisa_before:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Qty {entry.stage} ({entry.qty}) melebihi sisa dari {upstream_label} ({upstream} - {already_at_stage} = {max(int(sisa_before),0)})"
+        )
+    
+    update_doc = {
+        "po_id": po_id,
+        "item_id": entry.item_id,
+        "stage": entry.stage,
+        "qty": entry.qty,
+        "tanggal": entry.tanggal or old.get("tanggal") or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_by": user["_id"],
+    }
+    for meta_key in ("nama_barang", "nama_pengrajin", "spesifikasi", "gambar_path"):
+        val = getattr(entry, meta_key, None)
+        if val:
+            update_doc[meta_key] = val
+    
+    await db.progres.update_one({"_id": ObjectId(entry_id)}, {"$set": update_doc})
+    return {"message": "Entry updated", "sisa_setelah_input": (upstream - already_at_stage - entry.qty) if not is_manual else None}
+
+
 @api_router.delete("/progres/{entry_id}")
 async def delete_progres_entry(entry_id: str, user: dict = Depends(get_current_user)):
     if user["role"] != "admin":
@@ -1033,15 +1144,11 @@ async def get_progres(user: dict = Depends(get_current_user)):
 
 @api_router.get("/export/progres/pdf")
 async def export_progres_pdf(tanggal: Optional[str] = None, user: dict = Depends(get_current_user)):
-    """Export progres to PDF, optionally filtered by tanggal (updated_at date prefix)."""
-    query = {}
-    if tanggal:
-        query["updated_at"] = {"$regex": f"^{tanggal}"}
-    progres_records = await db.progres.find(query).to_list(1000)
-    
-    # Enrich with barang info
+    """Export progres to PDF. Aggregates stage entries per PO+barang. If tanggal given,
+       only include groups whose entries include that tanggal AND filter stage sums to that date only."""
+    # Aggregate qty_masuk per PO+barang from barang_masuk
     bm_records = await db.barang_masuk.find({}).to_list(1000)
-    bm_agg = {}
+    bm_agg: Dict[str, Dict[str, Any]] = {}
     for bm in bm_records:
         po_id = bm.get("po_id", "")
         for item in bm.get("items", []):
@@ -1057,7 +1164,31 @@ async def export_progres_pdf(tanggal: Optional[str] = None, user: dict = Depends
                     "qty_masuk": 0,
                 }
             bm_agg[k]["qty_masuk"] += item.get("qty_diterima", 0) or 0
-    
+
+    # Aggregate stage sums per PO+barang. If tanggal filter, sum only entries on that date.
+    match: Dict[str, Any] = {"stage": {"$in": VALID_STAGES}}
+    if tanggal:
+        match["tanggal"] = tanggal
+    pipeline = [
+        {"$match": match},
+        {"$group": {
+            "_id": {"po_id": "$po_id", "item_id": "$item_id", "stage": "$stage"},
+            "total": {"$sum": "$qty"},
+            "last_tanggal": {"$max": "$tanggal"},
+        }},
+    ]
+    stage_agg: Dict[str, Dict[str, Any]] = {}
+    async for r in db.progres.aggregate(pipeline):
+        _id = r.get("_id", {})
+        k = f"{_id.get('po_id','')}_{_id.get('item_id','')}"
+        if k not in stage_agg:
+            stage_agg[k] = {s: 0 for s in VALID_STAGES}
+            stage_agg[k]["tanggal"] = ""
+        stage_agg[k][_id["stage"]] = int(r.get("total", 0) or 0)
+        lt = r.get("last_tanggal") or ""
+        if lt > stage_agg[k]["tanggal"]:
+            stage_agg[k]["tanggal"] = lt
+
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm)
     story = []
@@ -1065,12 +1196,14 @@ async def export_progres_pdf(tanggal: Optional[str] = None, user: dict = Depends
     subtitle = f"Filter Tanggal: {tanggal}" if tanggal else "Semua Progres"
     _brand_header(story, "REKAP PROGRES BARANG", subtitle, styles)
     body_style = ParagraphStyle('body', parent=styles["BodyText"], fontSize=9, leading=11)
-    data = [["Foto", "No PO", "Nama Barang", "Pengrajin", "Masuk", "Grinda", "Servis", "Finishing", "Packing", "Status"]]
-    for p in progres_records:
-        k = f"{p.get('po_id','')}_{p.get('item_id')}"
-        info = bm_agg.get(k, {})
+    data = [["Foto", "No PO", "Nama Barang", "Pengrajin", "Tanggal", "Masuk", "Grinda", "Servis", "Finishing", "Packing", "Status"]]
+    # If tanggal filter provided, only show groups that have entries on that date
+    keys = [k for k in bm_agg.keys() if (not tanggal) or (k in stage_agg and any(stage_agg[k].get(s, 0) > 0 for s in VALID_STAGES))]
+    for k in keys:
+        info = bm_agg[k]
+        st = stage_agg.get(k, {s: 0 for s in VALID_STAGES})
         img = _fetch_image_flowable(info.get("gambar_path"), 18) or Paragraph("-", body_style)
-        packing = p.get("packing", 0) or 0
+        packing = st.get("packing", 0)
         qty_masuk = info.get("qty_masuk", 0)
         status = "KOMPLIT" if packing >= qty_masuk and qty_masuk > 0 else "PROSES"
         data.append([
@@ -1078,14 +1211,15 @@ async def export_progres_pdf(tanggal: Optional[str] = None, user: dict = Depends
             info.get("no_po", ""),
             Paragraph(info.get("nama_barang", ""), body_style),
             Paragraph(info.get("nama_pengrajin", ""), body_style),
+            st.get("tanggal", "") or "-",
             str(qty_masuk),
-            str(p.get("grinda", 0) or 0),
-            str(p.get("servis", 0) or 0),
-            str(p.get("finishing", 0) or 0),
+            str(st.get("grinda", 0)),
+            str(st.get("servis", 0)),
+            str(st.get("finishing", 0)),
             str(packing),
             status,
         ])
-    table = Table(data, repeatRows=1, colWidths=[16*mm, 22*mm, 34*mm, 26*mm, 12*mm, 14*mm, 14*mm, 16*mm, 14*mm, 16*mm])
+    table = Table(data, repeatRows=1, colWidths=[15*mm, 20*mm, 30*mm, 22*mm, 20*mm, 12*mm, 13*mm, 12*mm, 14*mm, 13*mm, 15*mm])
     table.setStyle(TableStyle([
         ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E5E5E5")),
         ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#8B5A2B")),
@@ -1715,12 +1849,11 @@ async def get_rekap_per_barang(user: dict = Depends(get_current_user)):
 
 @api_router.get("/rekap/progres")
 async def get_rekap_progres(user: dict = Depends(get_current_user)):
-    """Rekap progres berdasarkan PO+barang dengan qty_masuk aggregate."""
-    pos = await db.po.find({}).to_list(1000)
+    """Rekap progres berdasarkan PO+barang - aggregate dari stage entries (new model) + sisa per stage."""
     barang_masuk = await db.barang_masuk.find({}).to_list(1000)
-    progres_records = await db.progres.find({}).to_list(1000)
     
-    bm_agg = {}
+    # Aggregate qty_masuk per PO+barang
+    bm_agg: Dict[str, Dict[str, Any]] = {}
     for bm in barang_masuk:
         po_id = bm.get("po_id", "")
         for item in bm.get("items", []):
@@ -1729,6 +1862,7 @@ async def get_rekap_progres(user: dict = Depends(get_current_user)):
             k = f"{po_id}_{bid}"
             if k not in bm_agg:
                 bm_agg[k] = {
+                    "po_id": po_id,
                     "no_po": bm.get("no_po", ""),
                     "nama_barang": item.get("nama_barang", ""),
                     "nama_pengrajin": item.get("nama_pengrajin", ""),
@@ -1737,23 +1871,52 @@ async def get_rekap_progres(user: dict = Depends(get_current_user)):
                 }
             bm_agg[k]["qty_masuk"] += item.get("qty_diterima", 0) or 0
     
-    prog_map = {f"{p.get('po_id','')}_{p.get('item_id')}": p for p in progres_records}
+    # Aggregate stage sums + last tanggal via $group over stage entries
+    pipeline = [
+        {"$match": {"stage": {"$in": VALID_STAGES}}},
+        {"$group": {
+            "_id": {"po_id": "$po_id", "item_id": "$item_id", "stage": "$stage"},
+            "total": {"$sum": "$qty"},
+            "last_tanggal": {"$max": "$tanggal"},
+        }},
+    ]
+    stage_agg: Dict[str, Dict[str, Any]] = {}
+    async for r in db.progres.aggregate(pipeline):
+        _id = r.get("_id", {})
+        k = f"{_id.get('po_id','')}_{_id.get('item_id','')}"
+        if k not in stage_agg:
+            stage_agg[k] = {s: 0 for s in VALID_STAGES}
+            stage_agg[k]["tanggal"] = ""
+        stage_agg[k][_id["stage"]] = int(r.get("total", 0) or 0)
+        lt = r.get("last_tanggal") or ""
+        if lt > stage_agg[k]["tanggal"]:
+            stage_agg[k]["tanggal"] = lt
     
     result = []
     for k, info in bm_agg.items():
-        pr = prog_map.get(k, {"grinda": 0, "servis": 0, "finishing": 0, "packing": 0})
-        packing = pr.get("packing", 0) or 0
+        st = stage_agg.get(k, {s: 0 for s in VALID_STAGES})
+        grinda = st.get("grinda", 0)
+        servis = st.get("servis", 0)
+        finishing = st.get("finishing", 0)
+        packing = st.get("packing", 0)
+        qty_masuk = info["qty_masuk"]
         result.append({
+            "po_id": info["po_id"],
             "no_po": info["no_po"],
             "nama_barang": info["nama_barang"],
             "nama_pengrajin": info["nama_pengrajin"],
             "gambar_path": info["gambar_path"],
-            "qty_masuk": info["qty_masuk"],
-            "grinda": pr.get("grinda", 0) or 0,
-            "servis": pr.get("servis", 0) or 0,
-            "finishing": pr.get("finishing", 0) or 0,
+            "qty_masuk": qty_masuk,
+            "grinda": grinda,
+            "servis": servis,
+            "finishing": finishing,
             "packing": packing,
-            "komplit": packing >= info["qty_masuk"] and info["qty_masuk"] > 0,
+            "sisa_grinda": max(qty_masuk - grinda, 0),
+            "sisa_servis": max(grinda - servis, 0),
+            "sisa_finishing": max(servis - finishing, 0),
+            "sisa_packing": max(finishing - packing, 0),
+            "tanggal_terakhir": st.get("tanggal", "") or "",
+            "komplit": packing >= qty_masuk and qty_masuk > 0,
         })
     if user["role"] == "guest":
         for r in result:

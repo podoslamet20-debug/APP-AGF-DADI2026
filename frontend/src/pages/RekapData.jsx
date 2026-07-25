@@ -106,11 +106,16 @@ export default function RekapData() {
       "No PO": r.no_po,
       "Nama Barang": r.nama_barang,
       ...(canSeeCraftsman && { "Pengrajin": r.nama_pengrajin }),
+      "Tanggal Update": r.tanggal_terakhir || "-",
       "Qty Masuk": r.qty_masuk,
       "Grinda": r.grinda,
+      "Sisa Grinda": r.sisa_grinda,
       "Servis": r.servis,
+      "Sisa Servis": r.sisa_servis,
       "Finishing": r.finishing,
+      "Sisa Finishing": r.sisa_finishing,
       "Packing/Ready": r.packing,
+      "Sisa Packing": r.sisa_packing,
       "Status": r.komplit ? "KOMPLIT" : "PROSES",
     }));
     exportData(data, "rekap-progres", format);
@@ -273,11 +278,12 @@ export default function RekapData() {
                     <th className="p-2 text-left">No PO</th>
                     <th className="p-2 text-left">Barang</th>
                     {canSeeCraftsman && <th className="p-2 text-left">Pengrajin</th>}
+                    <th className="p-2 text-center">Tanggal Update</th>
                     <th className="p-2 text-right">Masuk</th>
-                    <th className="p-2 text-right">Grinda</th>
-                    <th className="p-2 text-right">Servis</th>
-                    <th className="p-2 text-right">Finishing</th>
-                    <th className="p-2 text-right">Packing/Ready</th>
+                    <th className="p-2 text-right">Grinda<br/><span className="text-[10px] font-normal text-[#5C5C5C]">Sisa</span></th>
+                    <th className="p-2 text-right">Servis<br/><span className="text-[10px] font-normal text-[#5C5C5C]">Sisa</span></th>
+                    <th className="p-2 text-right">Finishing<br/><span className="text-[10px] font-normal text-[#5C5C5C]">Sisa</span></th>
+                    <th className="p-2 text-right">Packing<br/><span className="text-[10px] font-normal text-[#5C5C5C]">Sisa</span></th>
                     <th className="p-2 text-center">Status</th>
                   </tr>
                 </thead>
@@ -288,11 +294,12 @@ export default function RekapData() {
                       <td className="p-2">{r.no_po}</td>
                       <td className="p-2 font-medium">{r.nama_barang}</td>
                       {canSeeCraftsman && <td className="p-2">{r.nama_pengrajin}</td>}
+                      <td className="p-2 text-center text-xs text-[#5C5C5C]">{r.tanggal_terakhir || "-"}</td>
                       <td className="p-2 text-right">{r.qty_masuk}</td>
-                      <td className="p-2 text-right">{r.grinda}</td>
-                      <td className="p-2 text-right">{r.servis}</td>
-                      <td className="p-2 text-right">{r.finishing}</td>
-                      <td className="p-2 text-right font-medium">{r.packing}</td>
+                      <td className="p-2 text-right"><div>{r.grinda}</div><div className="text-[10px] text-[#5C5C5C]">{r.sisa_grinda}</div></td>
+                      <td className="p-2 text-right"><div>{r.servis}</div><div className="text-[10px] text-[#5C5C5C]">{r.sisa_servis}</div></td>
+                      <td className="p-2 text-right"><div>{r.finishing}</div><div className="text-[10px] text-[#5C5C5C]">{r.sisa_finishing}</div></td>
+                      <td className="p-2 text-right font-medium"><div>{r.packing}</div><div className="text-[10px] text-[#5C5C5C]">{r.sisa_packing}</div></td>
                       <td className="p-2 text-center">{r.komplit ? <span className="text-xs px-2 py-0.5 bg-[#4CAF50] text-white rounded">KOMPLIT</span> : <span className="text-xs px-2 py-0.5 bg-[#FFC107] text-white rounded">PROSES</span>}</td>
                     </tr>
                   ))}
