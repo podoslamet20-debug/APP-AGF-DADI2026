@@ -20,9 +20,10 @@ Aplikasi rekap data barang furniture "AGFDATA" - Database Barang, PO, Barang Mas
 - **New Activity Log menu** (admin only) at `/activity-log` — table showing riwayat login, create, update, delete di semua menu dengan filter (action / resource / user / tanggal)
 - **Middleware auto-logging**: FastAPI middleware intercepts all successful mutations on `/api/*` (POST/PUT/DELETE/PATCH) and inserts `{user_id, user_email, user_role, action, resource, resource_label, resource_id, path, method, status_code, timestamp, ip}` — no per-endpoint instrumentation needed
 - **Explicit login/logout logging**: `/api/auth/login` logs success + failure (with attempted email); `/api/auth/logout` logs before clearing cookie
-- **Endpoints**: `GET /api/activity-log?action=&resource=&user_id=&date_from=&date_to=&limit=` (admin only, max 2000), `DELETE /api/activity-log/purge?before=YYYY-MM-DD` (admin only)
+- **Endpoints** (declared before `app.include_router`): `GET /api/activity-log?action=&resource=&user_id=&date_from=&date_to=&limit=` (admin only, max 2000), `DELETE /api/activity-log/purge?before=YYYY-MM-DD` (admin only)
 - **Indexes**: `timestamp` DESC, `user_id`, `resource` for fast filtering
 - Sidebar navigation includes new "Activity Log" item (admin role only)
+- Verified via curl: GET returns entries sorted desc, purge with missing `before` → 400, guest → 403
 
 ### Iteration 10 (Feb 2026) - Komplit Notifications + Progres Edit + Rekap Sync + Legacy Rebalance
 - **BarangMasuk KOMPLIT badge**: card shows "KOMPLIT PO" when `sum(qty_diterima) >= sum(qty)` across all PO items; per-item "KOMPLIT" badge when `qty_diterima >= qty`; qty label now shows `X / total_po` for clarity
