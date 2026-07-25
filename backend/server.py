@@ -2224,6 +2224,43 @@ async def get_rekap_staffing_detail(tanggal_from: Optional[str] = None, tanggal_
     return result
 
 
+# ===== Activity Log Endpoints =====
+@api_router.get("/activity-log")
+async def get_activity_log(
+    action: Optional[str] = None,
+    resource: Optional[str] = None,
+    user_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = 500,
+    user: dict = Depends(get_current_user),
+):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    query: Dict[str, Any] = {}
+    if action: query["action"] = action
+    if resource: query["resource"] = resource
+    if user_id: query["user_id"] = user_id
+    if date_from or date_to:
+        query["timestamp"] = {}
+        if date_from: query["timestamp"]["$gte"] = date_from
+        if date_to: query["timestamp"]["$lte"] = date_to + "T23:59:59Z"
+    entries = await db.activity_log.find(query).sort([("timestamp", -1)]).to_list(min(max(limit, 1), 2000))
+    for e in entries:
+        e["_id"] = str(e["_id"])
+    return entries
+
+
+@api_router.delete("/activity-log/purge")
+async def purge_activity_log(before: Optional[str] = None, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not before:
+        raise HTTPException(status_code=400, detail="Query param 'before' (YYYY-MM-DD) is required")
+    result = await db.activity_log.delete_many({"timestamp": {"$lt": before}})
+    return {"deleted": result.deleted_count}
+
+
 # Include router
 app.include_router(api_router)
 

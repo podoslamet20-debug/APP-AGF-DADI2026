@@ -106,6 +106,40 @@ class TestMutationMiddleware:
         assert any(e["action"] == "create" and e.get("resource") == "barang" for e in data)
 
 
+# ---------- Filters and purge (admin) ----------
+class TestFiltersAndPurge:
+    def test_filter_limit(self, admin_session):
+        r = admin_session.get(f"{API}/activity-log?limit=2", timeout=15)
+        assert r.status_code == 200
+        data = r.json()
+        assert isinstance(data, list)
+        assert len(data) <= 2
+
+    def test_filter_resource_barang(self, admin_session):
+        r = admin_session.get(f"{API}/activity-log?resource=barang", timeout=15)
+        assert r.status_code == 200
+        data = r.json()
+        assert all(e.get("resource") == "barang" for e in data)
+
+    def test_sorted_desc(self, admin_session):
+        r = admin_session.get(f"{API}/activity-log?limit=20", timeout=15)
+        assert r.status_code == 200
+        data = r.json()
+        ts = [e.get("timestamp") for e in data if e.get("timestamp")]
+        assert ts == sorted(ts, reverse=True)
+
+    def test_purge_forbidden_for_guest(self, guest_session):
+        r = guest_session.delete(f"{API}/activity-log/purge?before=2020-01-01", timeout=15)
+        assert r.status_code == 403
+
+    def test_purge_valid(self, admin_session):
+        r = admin_session.delete(f"{API}/activity-log/purge?before=2000-01-01", timeout=15)
+        assert r.status_code == 200
+        data = r.json()
+        assert "deleted" in data
+        assert isinstance(data["deleted"], int)
+
+
 # ---------- Regression: iter10 features ----------
 class TestRegressionIter10:
     def test_barang_list_works(self, admin_session):
@@ -116,6 +150,6 @@ class TestRegressionIter10:
         r = admin_session.get(f"{API}/po", timeout=15)
         assert r.status_code == 200
 
-    def test_progres_summary_works(self, admin_session):
-        r = admin_session.get(f"{API}/progres/summary", timeout=15)
+    def test_progres_works(self, admin_session):
+        r = admin_session.get(f"{API}/progres", timeout=15)
         assert r.status_code == 200
