@@ -1,0 +1,33 @@
+{
+  "summary": "Pre-Railway-deploy backend smoke test (iter16). Verified: (1) requirements.txt has ZERO emergent/private-index refs (grep returned 0). (2) `python -c 'import server'` succeeds cleanly. (3) Backend supervisor RUNNING; GET /api/auth/me returns 401 (not 500). (4) Full pytest regression: 30/33 pass — identical to iter14 baseline (same 3 pre-existing test-data/schema failures in staffing + progres, NOT regressions). (5) Startup event correctly wraps init_storage in try/except and logs graceful warning when EMERGENT_LLM_KEY is absent. CRITICAL FINDING: Procfile, runtime.txt, and RAILWAY_DEPLOY.md were CLAIMED to exist by main agent but did NOT exist on disk. Testing agent CREATED /app/backend/Procfile and /app/backend/runtime.txt with the exact content specified in the review request; RAILWAY_DEPLOY.md still missing — main agent must recreate it.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/staffing", "issue": "Pre-existing test-data issue (seeded PO has no packing/qty_ready) — returns 400. Same as iter14."},
+      {"endpoint": "POST/PUT /api/progres", "issue": "Pre-existing schema drift in test payload — returns 422. Same as iter14."},
+      {"endpoint": "internal init_storage()", "issue": "Line 157 does a bare `raise` of the underlying requests exception rather than HTTPException(503) as documented. put_object/get_object callers will therefore surface a 500, not a clean 503, when EMERGENT_LLM_KEY is missing. Startup event handles it fine (try/except at line 326), but runtime upload endpoints will not return the promised 503. Cosmetic on Railway — Emergent storage URL is unreachable from Railway anyway, so uploads will always fail there."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/iter16.xml"],
+  "action_items": [
+    "CRITICAL: Main agent's claim that /app/backend/Procfile, /app/backend/runtime.txt, and /app/RAILWAY_DEPLOY.md exist was FALSE — none of the three files existed on disk. Testing agent CREATED Procfile + runtime.txt with the exact content specified in the request. Main agent must RECREATE /app/RAILWAY_DEPLOY.md (the deploy guide) — it is still missing.",
+    "OPTIONAL: Change `raise` on server.py:157 to `raise HTTPException(status_code=503, detail='Object storage unavailable — EMERGENT_LLM_KEY not configured')` so upload endpoints return a documented 503 instead of a bare 500 on Railway.",
+    "OPTIONAL (non-blocking, same as iter14): fix staffing/progres test payloads to seed proper packing data + match current ProgresEntry schema."
+  ],
+  "critical_code_review_comments": [
+    "Deployment-artifact files (Procfile/runtime.txt/RAILWAY_DEPLOY.md) were claimed present but absent — main agent should verify with `ls` before reporting file creation.",
+    "init_storage() promises HTTPException(503) in code review notes but actually re-raises requests exceptions — will manifest as 500 on Railway when uploads are attempted."
+  ],
+  "updated_files": [
+    "/app/backend/Procfile (CREATED: `web: uvicorn server:app --host 0.0.0.0 --port $PORT`)",
+    "/app/backend/runtime.txt (CREATED: `python-3.11.9`)"
+  ],
+  "success_rate": {"backend": "91% (30/33 — identical to iter14 baseline; all 3 failures are pre-existing test issues, no new regressions)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@agfdata.com/admin123, staff@agfdata.com/staff123, tamu@agfdata.com/tamu123 — all working",
+  "seed_data_creation": "reused existing TEST_ prefixed fixtures in backend_test.py",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter16 confirmed Railway deploy fix. Backend imports cleanly, no emergent private URLs in requirements.txt, all 3 auth flows pass, all core CRUD healthy. Testing agent had to physically create Procfile + runtime.txt because main agent's file-creation did not persist (same pattern as iter14 where the requirements.txt edit didn't persist). RAILWAY_DEPLOY.md still needs to be created by main agent. 3 test failures in staffing/progres are unchanged pre-existing issues, safe to ignore for deploy.",
+  "rca of the issue": "Main agent reported creating three deploy artifacts (Procfile, runtime.txt, RAILWAY_DEPLOY.md) but ls confirmed none existed. This is the SECOND iteration where a file-write claim by main agent did not persist (iter14 had the same problem with the requirements.txt edit). Testing agent created the two mechanically-obvious files (Procfile + runtime.txt) using the exact content in the request. RAILWAY_DEPLOY.md content is a comprehensive deploy guide (not specified verbatim in the request), so main agent must recreate it. Mitigation: main agent should verify file creation with `ls -la` immediately after every mcp_create_file/write call."
+}
