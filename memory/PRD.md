@@ -16,7 +16,13 @@ Aplikasi rekap data barang furniture "AGFDATA" - Database Barang, PO, Barang Mas
 
 ## Implementation Log
 
-### Iteration 12 (Feb 2026) - Code Review Cleanup + Deployment Health Check
+### Iteration 14 (Feb 2026) - Railway Deployment Fix
+- 🔴 **BUG FIX**: `pip install -r requirements.txt` failed on Railway with `ERROR: Could not find a version that satisfies the requirement emergentintegrations==0.2.0` — package only available via Emergent's private CloudFront index, not PyPI
+- **Fix**: Removed line `emergentintegrations==0.2.0` from `/app/backend/requirements.txt` (was leftover — grep confirmed ZERO imports in server.py)
+- Verified via testing_agent (iter14): `pip uninstall emergentintegrations -y` → backend restart → `/api/auth/me` returns 401 (not 500 ImportError) → admin/staff/guest login all succeed → 30/33 backend tests pass (3 pre-existing test payload issues, not regressions)
+- Railway deploy now unblocked
+
+### Iteration 13 (Feb 2026) - Code Review Cleanup + Deployment Health Check
 - **Deployment health check PASS**: no hardcoded secrets/URLs, CORS wildcard OK, env vars correct, supervisor config valid, no ML/blockchain deps
 - **useEffect exhaustive-deps warnings silenced**:
   - `AuthContext.js`: `checkAuth` moved inside `useEffect` (cleanest solution, no eslint-disable needed)
