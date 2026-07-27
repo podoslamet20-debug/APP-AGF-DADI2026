@@ -25,6 +25,7 @@ export default function UserManagement() {
     } catch (e) { toast.error("Gagal load users"); }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
 
   const submit = async () => {

@@ -55,9 +55,10 @@ export default function ActivityLog() {
   };
 
   const loadUsers = async () => {
-    try { const { data } = await axios.get(`${API}/users`); setUsers(data); } catch (e) { /* ignore */ }
+    try { const { data } = await axios.get(`${API}/users`); setUsers(data); } catch (e) { console.error("Failed to load users:", e); }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); loadUsers(); }, []);
 
   const formatDateTime = (iso) => {

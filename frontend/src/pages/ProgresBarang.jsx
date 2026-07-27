@@ -55,6 +55,7 @@ export default function ProgresBarang() {
     } catch (e) { console.error(e); }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
 
   const loadHistory = async (poId, itemId) => {

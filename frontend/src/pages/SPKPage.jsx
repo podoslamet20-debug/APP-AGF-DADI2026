@@ -42,6 +42,7 @@ export default function SPKPage() {
     } catch (e) { console.error(e); }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [search]);
 
   const importFromPO = (poId) => {

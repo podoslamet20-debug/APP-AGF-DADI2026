@@ -12,18 +12,17 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const checkAuth = async () => {
-    try {
-      const { data } = await axios.get(`${API}/auth/me`);
-      setUser(data);
-    } catch {
-      setUser(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const { data } = await axios.get(`${API}/auth/me`);
+        setUser(data);
+      } catch {
+        setUser(null);
+      } finally {
+        setLoading(false);
+      }
+    };
     checkAuth();
   }, []);
 

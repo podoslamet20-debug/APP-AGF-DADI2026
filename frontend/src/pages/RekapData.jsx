@@ -44,6 +44,7 @@ export default function RekapData() {
     } catch (e) { console.error(e); }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [filterTanggal, filterNoPO]);
 
   const exportPO = (format) => {

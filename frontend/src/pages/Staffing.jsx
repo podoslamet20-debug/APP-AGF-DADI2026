@@ -34,6 +34,7 @@ export default function Staffing() {
     } catch (e) { console.error(e); }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [search]);
 
   const selectPO = (poId) => {
