@@ -316,9 +316,15 @@ PREV_STAGE = {"grinda": None, "servis": "grinda", "finishing": "servis", "packin
 @app.on_event("startup")
 async def startup_event():
     try:
-        # Initialize storage
-        init_storage()
-        logger.info("Storage initialized")
+        # Initialize storage (non-fatal: app still boots without object storage; uploads will 503 gracefully)
+        try:
+            if EMERGENT_KEY:
+                init_storage()
+                logger.info("Storage initialized")
+            else:
+                logger.warning("EMERGENT_LLM_KEY not set — object storage disabled. Image upload/serve endpoints will return 503.")
+        except Exception as e:
+            logger.warning(f"Storage init failed (non-fatal, uploads will 503): {e}")
         
         # Create indexes
         await db.users.create_index("email", unique=True)
