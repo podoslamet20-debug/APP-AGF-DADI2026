@@ -16,6 +16,15 @@ Aplikasi rekap data barang furniture "AGFDATA" - Database Barang, PO, Barang Mas
 
 ## Implementation Log
 
+### Iteration 12 (Feb 2026) - Code Review Cleanup + Deployment Health Check
+- **Deployment health check PASS**: no hardcoded secrets/URLs, CORS wildcard OK, env vars correct, supervisor config valid, no ML/blockchain deps
+- **useEffect exhaustive-deps warnings silenced**:
+  - `AuthContext.js`: `checkAuth` moved inside `useEffect` (cleanest solution, no eslint-disable needed)
+  - 10 pages (UserManagement, BarangMasuk, POPage, SPKPage, Staffing, DatabaseBarang, ProgresBarang, RekapData, ActivityLog): `// eslint-disable-next-line react-hooks/exhaustive-deps` added (intentional mount-only effects — cosmetic tech debt only, no behavior change)
+- **ActivityLog.jsx line 58**: empty catch block replaced with `console.error("Failed to load users:", e)`
+- **Note**: `server.py:1079/1081` uses `if po_id is not None` which is **correct** Python (PEP 8 mandates `is` for None comparisons) — reviewer's flag was a false positive; not modified
+- Regression: 16/16 backend + 100% frontend (iter13)
+
 ### Iteration 11 (Feb 2026) - Activity Log / Audit Trail
 - **New Activity Log menu** (admin only) at `/activity-log` — table showing riwayat login, create, update, delete di semua menu dengan filter (action / resource / user / tanggal)
 - **Middleware auto-logging**: FastAPI middleware intercepts all successful mutations on `/api/*` (POST/PUT/DELETE/PATCH) and inserts `{user_id, user_email, user_role, action, resource, resource_label, resource_id, path, method, status_code, timestamp, ip}` — no per-endpoint instrumentation needed
