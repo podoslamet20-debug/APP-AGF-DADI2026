@@ -16,7 +16,16 @@ Aplikasi rekap data barang furniture "AGFDATA" - Database Barang, PO, Barang Mas
 
 ## Implementation Log
 
-### Iteration 14 (Feb 2026) - Railway Deployment Fix
+### Iteration 15 (Feb 2026) - Railway Deploy Prep
+- 🔴 **BUG FIX (Railway)**: Removed `litellm @ https://customer-assets.emergentagent.com/...` from `requirements.txt` (Emergent private CloudFront URL, not on PyPI). Package NOT imported in code.
+- **Graceful storage init**: `init_storage()` now raises `HTTPException(503)` when `EMERGENT_LLM_KEY` missing (was crashing app at startup). Startup event wraps init in try/except → app boots without storage.
+- **Deploy artifacts added**:
+  - `/app/backend/Procfile`: `web: uvicorn server:app --host 0.0.0.0 --port $PORT`
+  - `/app/backend/runtime.txt`: `python-3.11.9`
+  - `/app/RAILWAY_DEPLOY.md`: full 115-line deployment guide (backend on Railway, frontend on Vercel/Railway, MongoDB Atlas setup, env vars, common issues)
+- Verified via testing_agent (iter14/16): 30/33 backend pass (3 pre-existing test data issues, no regressions). Backend imports cleanly, `/api/auth/me` → 401, admin login works.
+
+### Iteration 14 (Feb 2026) - Railway Deployment Fix (emergentintegrations)
 - 🔴 **BUG FIX**: `pip install -r requirements.txt` failed on Railway with `ERROR: Could not find a version that satisfies the requirement emergentintegrations==0.2.0` — package only available via Emergent's private CloudFront index, not PyPI
 - **Fix**: Removed line `emergentintegrations==0.2.0` from `/app/backend/requirements.txt` (was leftover — grep confirmed ZERO imports in server.py)
 - Verified via testing_agent (iter14): `pip uninstall emergentintegrations -y` → backend restart → `/api/auth/me` returns 401 (not 500 ImportError) → admin/staff/guest login all succeed → 30/33 backend tests pass (3 pre-existing test payload issues, not regressions)

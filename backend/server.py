@@ -146,15 +146,19 @@ def init_storage():
     global storage_key
     if storage_key:
         return storage_key
+    if not EMERGENT_KEY:
+        raise HTTPException(status_code=503, detail="Object storage tidak tersedia (EMERGENT_LLM_KEY belum diset di env)")
     try:
         resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
         resp.raise_for_status()
         storage_key = resp.json()["storage_key"]
         logger.info("Storage initialized successfully")
         return storage_key
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Storage init failed: {e}")
-        raise
+        raise HTTPException(status_code=503, detail=f"Storage init gagal: {e}")
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
     key = init_storage()
