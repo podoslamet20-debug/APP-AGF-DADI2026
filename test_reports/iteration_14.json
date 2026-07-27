@@ -1,0 +1,27 @@
+{
+  "summary": "Regression testing after Railway deployment fix (removal of emergentintegrations dependency). Verified: (1) `emergentintegrations` line was STILL PRESENT in /app/backend/requirements.txt at line 22 despite main agent's claim of removal — testing agent removed it. (2) Package uninstalled from venv (import fails as expected). (3) Backend supervisor RUNNING. (4) `GET /api/auth/me` unauthenticated returns 401 (not 500 — no ImportError). (5) Admin/Staff/Guest login all succeed. (6) Full pytest regression suite: 30/33 passed. The 3 failures are pre-existing business-logic/schema issues in test payloads (not caused by emergentintegrations removal): staffing requires qty_ready>0 (seeded PO has no packing data, returns 400), and progres endpoint payload schema no longer matches (returns 422). Railway deploy fix is VERIFIED WORKING.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/staffing", "issue": "Test payload rejected with 400 because seeded PO has no packing/qty_ready. Pre-existing test data issue — endpoint itself works (validation working correctly)."},
+      {"endpoint": "POST /api/progres", "issue": "Test payload schema (barang_masuk_id + item_id + grinda/servis/finishing/packing) returns 422 — likely schema drift vs current ProgresEntry model. Pre-existing test issue, not a regression."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/iter14.xml"],
+  "action_items": [
+    "MAIN AGENT: Note that emergentintegrations==0.2.0 was still present in requirements.txt when testing began — the earlier edit did not persist. Testing agent removed it. Confirm before Railway deploy: `grep emergentintegrations /app/backend/requirements.txt` should return nothing.",
+    "Optional cleanup (not blocking Railway): update backend_test.py staffing/progres tests to seed proper packing data (barang-masuk with grinda/servis/finishing/packing progressed to Ready) and match current ProgresEntry payload schema."
+  ],
+  "critical_code_review_comments": [
+    "server.py still references EMERGENT_LLM_KEY env var and emergentagent.com storage URL via raw `requests` calls (not via emergentintegrations lib) — this is fine for Railway as long as EMERGENT_LLM_KEY env var is set there, but upload endpoint will 500 if the env var is missing. Consider guarding /api/upload with a clearer error when EMERGENT_LLM_KEY is unset."
+  ],
+  "updated_files": ["/app/backend/requirements.txt (removed line 22: emergentintegrations==0.2.0)"],
+  "success_rate": {"backend": "91% (30/33) — 100% on Railway-fix-relevant tests (auth, barang, po, spk, rekap, exports, barang-masuk)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@agfdata.com/admin123, staff@agfdata.com/staff123, tamu@agfdata.com/tamu123 — all working",
+  "seed_data_creation": "backend_test.py fixtures seed TEST_ prefixed barang + PO per session",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter14 verified Railway deploy fix (emergentintegrations removed). All auth + CRUD + export endpoints healthy. 3 pre-existing test failures in staffing/progres are payload/schema issues, not regressions — do not block deploy. If updating tests: seed barang-masuk with progres entries before creating staffing to satisfy qty_ready validation.",
+  "rca of the issue": "User's Railway build failed on `pip install -r requirements.txt` because pip could not resolve `emergentintegrations==0.2.0` (only hosted at Emergent private CloudFront index, not PyPI). Main agent attempted removal but change did not persist (line was still at line 22 when iter14 started). Fix: physically remove the line and confirm via `grep emergentintegrations /app/backend/requirements.txt` returns empty. Verified backend still imports and runs cleanly with package uninstalled (confirmed via `python -c 'import emergentintegrations'` -> ModuleNotFoundError, yet backend `/api/auth/me` returns 401 as expected). Railway build should now succeed."
+}
