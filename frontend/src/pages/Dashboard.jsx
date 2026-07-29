@@ -2,16 +2,29 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import axios from "axios";
 import { Card } from "@/components/ui/card";
-import { Package, ShoppingCart, PackageOpen, Truck, FileText, TrendingUp, Trophy, Hammer, Calendar } from "lucide-react";
+import { Package, ShoppingCart, PackageOpen, Truck, FileText, TrendingUp, Trophy, Hammer, Calendar, BellRing, PackageCheck, ChevronDown, ChevronUp, Check, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
 export default function Dashboard() {
-  const { API, user, isGuest } = useAuth();
+  const { API, user, isGuest, isAdmin } = useAuth();
   const [stats, setStats] = useState({ barang: 0, po: 0, barangMasuk: 0, staffing: 0, spk: 0 });
   const [kinerjaMonth, setKinerjaMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [kinerja, setKinerja] = useState([]);
+  const [poReady, setPoReady] = useState({ count: 0, pos: [] });
+  const [poReadyOpen, setPoReadyOpen] = useState(true);
+  const [expandedPo, setExpandedPo] = useState(null);
+  const [markingId, setMarkingId] = useState(null);
+
+  const loadPoReady = async () => {
+    try {
+      const { data } = await axios.get(`${API}/dashboard/po-ready`);
+      setPoReady({ count: data.count || 0, pos: data.pos || [] });
+    } catch (e) { console.error("Failed to load PO ready:", e); }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -27,7 +40,22 @@ export default function Dashboard() {
       } catch (e) { console.error(e); }
     };
     load();
+    loadPoReady();
   }, [API]);
+
+  const handleMarkShipped = async (poId, noPo) => {
+    if (!window.confirm(`Tandai PO "${noPo}" sebagai sudah dikirim? PO akan hilang dari daftar notifikasi ini.`)) return;
+    setMarkingId(poId);
+    try {
+      await axios.post(`${API}/dashboard/po-ready/${poId}/mark-shipped`);
+      toast.success(`PO ${noPo} ditandai sudah dikirim`);
+      await loadPoReady();
+    } catch (e) {
+      toast.error("Gagal menandai PO: " + (e.response?.data?.detail || e.message));
+    } finally {
+      setMarkingId(null);
+    }
+  };
 
   useEffect(() => {
     if (isGuest) return;
@@ -75,6 +103,89 @@ export default function Dashboard() {
           </Link>
         ))}
       </div>
+
+      {/* PO Ready-to-Ship Notification */}
+      {poReady.count > 0 && (
+        <Card className="border border-[#4CAF50] bg-[#4CAF5010]" data-testid="po-ready-notif-card">
+          <div className="p-4 sm:p-5 flex items-start gap-3">
+            <div className="w-10 h-10 rounded-full bg-[#4CAF50] flex items-center justify-center flex-shrink-0 animate-pulse">
+              <BellRing className="w-5 h-5 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                  <h3 className="text-lg font-bold text-[#1A1A1A]" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>
+                    <span className="text-[#2E7D32]">{poReady.count}</span> PO Siap Kirim! 🚚
+                  </h3>
+                  <p className="text-sm text-[#5C5C5C]">Semua barang sudah selesai stage <strong>Packing</strong> — siap dikirim ke pelanggan.</p>
+                </div>
+                <Button variant="ghost" size="sm" onClick={() => setPoReadyOpen(!poReadyOpen)} data-testid="po-ready-toggle" className="text-[#2E7D32]">
+                  {poReadyOpen ? (<><ChevronUp className="w-4 h-4 mr-1" /> Sembunyikan</>) : (<><ChevronDown className="w-4 h-4 mr-1" /> Lihat Detail</>)}
+                </Button>
+              </div>
+
+              {poReadyOpen && (
+                <div className="mt-4 space-y-2" data-testid="po-ready-list">
+                  {poReady.pos.map((p) => {
+                    const isExpanded = expandedPo === p.po_id;
+                    return (
+                      <div key={p.po_id} className="bg-white border border-[#4CAF50]/40 rounded-md overflow-hidden" data-testid={`po-ready-row-${p.no_po}`}>
+                        <div className="p-3 flex items-center gap-3 flex-wrap">
+                          <PackageCheck className="w-5 h-5 text-[#4CAF50] flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-[#1A1A1A]">{p.no_po}</p>
+                            <p className="text-xs text-[#5C5C5C]">
+                              {p.total_items} barang · {p.total_qty} qty siap kirim
+                              {p.created_at ? ` · dibuat ${new Date(p.created_at).toLocaleDateString('id-ID', { day:'2-digit', month:'short', year:'numeric' })}` : ''}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <Button size="sm" variant="outline" onClick={() => setExpandedPo(isExpanded ? null : p.po_id)} data-testid={`po-ready-expand-${p.no_po}`}>
+                              {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                              Detail
+                            </Button>
+                            <Link to="/po">
+                              <Button size="sm" variant="outline" className="text-[#8B5A2B] border-[#8B5A2B]/40" data-testid={`po-ready-view-${p.no_po}`}>Buka PO</Button>
+                            </Link>
+                            {isAdmin && (
+                              <Button size="sm" className="bg-[#4CAF50] hover:bg-[#2E7D32] text-white" disabled={markingId === p.po_id} onClick={() => handleMarkShipped(p.po_id, p.no_po)} data-testid={`po-ready-mark-shipped-${p.no_po}`}>
+                                <Check className="w-4 h-4 mr-1" />
+                                {markingId === p.po_id ? "..." : "Tandai Dikirim"}
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                        {isExpanded && (
+                          <div className="border-t border-[#E5E5E5] bg-[#FAFAFA] px-3 py-2" data-testid={`po-ready-items-${p.no_po}`}>
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="text-[#5C5C5C]">
+                                  <th className="text-left py-1 font-medium">Barang</th>
+                                  <th className="text-right py-1 font-medium">Qty PO</th>
+                                  <th className="text-right py-1 font-medium">Qty Siap</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(p.items || []).map((it, idx) => (
+                                  <tr key={idx} className="border-t border-[#E5E5E5]/60">
+                                    <td className="py-1 text-[#1A1A1A]">{it.nama_barang}</td>
+                                    <td className="py-1 text-right text-[#1A1A1A]">{it.qty}</td>
+                                    <td className="py-1 text-right font-semibold text-[#2E7D32]">{it.qty_ready}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {!isGuest && (
         <Card className="p-6 border border-[#E5E5E5]" data-testid="kinerja-pengrajin-card">

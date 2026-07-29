@@ -2194,6 +2194,102 @@ async def get_kinerja_pengrajin(month: Optional[str] = None, user: dict = Depend
     return {"month": month, "pengrajin": result}
 
 
+@api_router.get("/dashboard/po-ready")
+async def get_po_ready(user: dict = Depends(get_current_user)):
+    """Return list of POs where ALL items have reached packing stage (qty_ready >= qty).
+    Excludes POs marked as already shipped (marked_shipped=True).
+    Available for all authenticated roles. Prices hidden for staff/guest; pengrajin hidden for guest.
+    """
+    packing_map = await _get_packing_map()
+    pos = await db.po.find({}).to_list(1000)
+    result: List[Dict[str, Any]] = []
+    for po in pos:
+        po["_id"] = str(po["_id"])
+        # Skip PO that was explicitly marked as shipped/done by admin
+        if po.get("marked_shipped"):
+            continue
+        items = po.get("items", []) or []
+        if not items:
+            continue
+        total_qty = 0
+        total_ready = 0
+        all_ready = True
+        enriched_items: List[Dict[str, Any]] = []
+        for item in items:
+            qty = int(item.get("qty", 0) or 0)
+            k = f"{po['_id']}_{item.get('barang_id','')}"
+            qty_ready = int(packing_map.get(k, 0) or 0)
+            total_qty += qty
+            total_ready += min(qty_ready, qty)
+            if qty_ready < qty:
+                all_ready = False
+                break  # short-circuit; PO not ready
+            enriched_items.append({
+                "barang_id": item.get("barang_id"),
+                "nama_barang": item.get("nama_barang"),
+                "qty": qty,
+                "qty_ready": qty_ready,
+            })
+        if not all_ready:
+            continue
+        result.append({
+            "po_id": po["_id"],
+            "no_po": po.get("no_po", ""),
+            "total_items": len(items),
+            "total_qty": total_qty,
+            "total_ready": total_ready,
+            "created_at": po.get("created_at"),
+            "items": enriched_items,
+        })
+    # Sort by created_at desc (newest first)
+    result.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    # For guest — do not expose items list (guest doesn't see pengrajin, but items here don't contain pengrajin so OK). Guest still allowed.
+    return {"count": len(result), "pos": result}
+
+
+@api_router.post("/dashboard/po-ready/{po_id}/mark-shipped")
+async def mark_po_shipped(po_id: str, user: dict = Depends(get_current_user)):
+    """Admin action: mark a PO as shipped so it disappears from the Ready-to-Ship notification.
+    Idempotent — safe to call multiple times."""
+    if user["role"] not in ["admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    try:
+        oid = ObjectId(po_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid po_id")
+    po = await db.po.find_one({"_id": oid})
+    if not po:
+        raise HTTPException(status_code=404, detail="PO not found")
+    await db.po.update_one(
+        {"_id": oid},
+        {"$set": {
+            "marked_shipped": True,
+            "marked_shipped_at": datetime.now(timezone.utc).isoformat(),
+            "marked_shipped_by": user["_id"],
+        }}
+    )
+    return {"ok": True, "po_id": po_id, "no_po": po.get("no_po", "")}
+
+
+@api_router.post("/dashboard/po-ready/{po_id}/unmark-shipped")
+async def unmark_po_shipped(po_id: str, user: dict = Depends(get_current_user)):
+    """Admin action: revert a mark-shipped. Puts PO back into Ready-to-Ship list if still qualifies."""
+    if user["role"] not in ["admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    try:
+        oid = ObjectId(po_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid po_id")
+    po = await db.po.find_one({"_id": oid})
+    if not po:
+        raise HTTPException(status_code=404, detail="PO not found")
+    await db.po.update_one(
+        {"_id": oid},
+        {"$unset": {"marked_shipped": "", "marked_shipped_at": "", "marked_shipped_by": ""}}
+    )
+    return {"ok": True, "po_id": po_id, "no_po": po.get("no_po", "")}
+
+
 
 
 @api_router.get("/users")

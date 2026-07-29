@@ -169,31 +169,89 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      Please test the following after storage backend change from Emergent Object Storage → MongoDB GridFS:
+      NEW FEATURE ADDED — Notif PO Ready to Ship (Dashboard notification).
       
-      PRIORITY 1 — File Upload (the reported bug):
-      1. Login as admin (admin@agfdata.com / admin123)
-      2. POST /api/upload with a small image file — expect 200 and JSON {"path": "...", "url": "/api/files/..."}
-      3. GET /api/files/{path} — expect 200 with image bytes and correct Content-Type (image/jpeg or image/png)
-      4. Verify upload requires admin role (staff/guest should get 403)
-      5. Create a Barang with the uploaded gambar_path — verify Barang has the image reference
+      BACKEND (new endpoints in /app/backend/server.py):
+      - GET /api/dashboard/po-ready
+        Returns { count, pos: [{ po_id, no_po, total_items, total_qty, total_ready, created_at, items:[{barang_id,nama_barang,qty,qty_ready}] }] }
+        Logic: for each PO not marked_shipped, check every item's qty_ready (from packing_map) >= qty. All items ready → include.
+        Auth: any authenticated role (admin/staff/owner/guest). No price/pengrajin data leaked.
+      - POST /api/dashboard/po-ready/{po_id}/mark-shipped (admin only)
+        Marks PO with marked_shipped=True so it's hidden from the notification list. Returns { ok, po_id, no_po }.
+        Idempotent. Response 400 for invalid po_id, 404 if PO not found, 403 if not admin.
+      - POST /api/dashboard/po-ready/{po_id}/unmark-shipped (admin only)
+        Reverts mark-shipped. Same auth/errors as above.
       
-      PRIORITY 2 — Regression tests (make sure nothing else broke):
-      1. Auth: login as admin/staff/owner/guest works, /api/auth/me returns correct role
-      2. Barang CRUD (admin can POST/PUT/DELETE, staff cannot)
-      3. Pengrajin CRUD
-      4. PO CRUD
-      5. SPK CRUD with allocation validation
-      6. Barang Masuk (per pengrajin)
-      7. Progres Barang (per pengrajin, 4 stages)
-      8. Staffing filters
-      9. Rekap endpoints (all-po, per-barang, progres, per-pengrajin)
-      10. Dashboard kinerja pengrajin
-      11. Export PDF/Excel for staffing and BM (these use _fetch_image_flowable → get_object → GridFS)
-      12. Activity log
+      FRONTEND (Dashboard.jsx):
+      - Green pulse-animated notification card appears above the stats cards when count > 0.
+      - Shows "X PO Siap Kirim!" header, expandable list per PO with per-item qty vs qty_ready table.
+      - Admin sees "Tandai Dikirim" button per PO → calls mark-shipped and refreshes list.
+      - Toggle to collapse/expand entire card.
       
-      Test credentials in /app/memory/test_credentials.md. Backend URL: use REACT_APP_BACKEND_URL from frontend/.env
-      (currently https://11a03a0d-d98a-445f-8f6d-5eb650bd3fb5.preview.emergentagent.com).
+      PLEASE TEST (backend priority):
+      1. GET /api/dashboard/po-ready — auth required (401 unauth). Works for all 4 roles.
+      2. Create a PO with 1-2 items, add progres entries reaching packing stage matching qty for every item — verify PO appears in po-ready list.
+      3. Verify PO does NOT appear when qty_ready < qty for any item (partially ready).
+      4. POST /api/dashboard/po-ready/{po_id}/mark-shipped — admin allowed, others 403. PO disappears from list. Second call idempotent.
+      5. POST /api/dashboard/po-ready/{po_id}/unmark-shipped — admin only. PO reappears in list (if still qualifies).
+      6. Invalid po_id → 400. Non-existing po_id → 404.
+      7. Regression: verify existing endpoints (auth, upload, barang, po, spk, progres, dashboard/kinerja-pengrajin) still work.
+
+  - agent: "main"
+    message: |
+      Previous testing round: File Upload via GridFS PASSED 35/35 (upload endpoint bug fix complete). Now added PO Ready notification feature — please test the new endpoints as described above.
+
+test_plan:
+  current_focus:
+    - "PO Ready-to-Ship notification (GET /api/dashboard/po-ready)"
+    - "Mark PO shipped (POST /api/dashboard/po-ready/{id}/mark-shipped)"
+    - "Unmark PO shipped (POST /api/dashboard/po-ready/{id}/unmark-shipped)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+backend:
+  - task: "PO Ready-to-Ship notification endpoint"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Added GET /api/dashboard/po-ready. Returns POs where all items reached packing stage. Uses _get_packing_map helper. Excludes POs with marked_shipped=True. All authenticated roles allowed."
+      - working: true
+        agent: "testing"
+        comment: "PASSED (43/43 tests). GET /api/dashboard/po-ready working correctly: (1) Returns empty list when no POs ready (baseline test). (2) Returns PO with correct structure when all items reach packing stage (total_ready=5, items[0].qty_ready=5). (3) Auth working: 401 for unauthenticated, 200 for all roles (admin/staff/owner/guest). (4) Partial-ready logic correct: PO with 2 items where only 1 item ready does NOT appear in list (all items must be ready). (5) Marked POs correctly excluded from list. (6) Response structure validated: count, pos array with po_id, no_po, total_items, total_qty, total_ready, created_at, items array with barang_id, nama_barang, qty, qty_ready."
+  - task: "Mark/Unmark PO Shipped endpoints"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Added POST /api/dashboard/po-ready/{po_id}/mark-shipped and /unmark-shipped. Admin only. Idempotent."
+      - working: true
+        agent: "testing"
+        comment: "PASSED (43/43 tests). Mark/Unmark endpoints working correctly: (1) POST mark-shipped: admin can mark PO as shipped, returns {ok:true, po_id, no_po}, PO disappears from ready list. (2) Auth: staff/guest/owner correctly denied (403). (3) Idempotent: calling mark-shipped twice returns 200 OK. (4) Error handling: invalid po_id returns 400, non-existent po_id returns 404. (5) POST unmark-shipped: admin can unmark PO, PO reappears in ready list (if still qualifies). (6) Auth: staff/guest/owner correctly denied (403). Both endpoints admin-only as specified."
+
+frontend:
+  - task: "Dashboard PO Ready notif card"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/pages/Dashboard.jsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Notif card with count badge, expandable per-PO details, admin mark-shipped button. Shows only when count > 0."
   
   - agent: "testing"
     message: |
@@ -226,3 +284,58 @@ agent_communication:
       - No errors in backend logs
       
       CONCLUSION: Bug fix complete. Photo upload ("tidak bisa upload foto") now working with MongoDB GridFS. App is ready for Railway deployment.
+
+  - agent: "testing"
+    message: |
+      ✅ ALL TESTS PASSED (43/43) - PO Ready-to-Ship Notification Feature Complete!
+      
+      NEW FEATURE TESTS (Steps A-N from test plan):
+      
+      ✅ Step A: Test data creation (pengrajin, barang, PO with 1 item qty=5)
+      ✅ Step B: Baseline check - PO NOT in ready list (no progres yet)
+      ✅ Step C: SPK creation for PO/barang/pengrajin
+      ✅ Step D: Barang-masuk creation (qty_diterima=5)
+      ✅ Step E: Progres entries (grinda→servis→finishing→packing, each qty=5)
+      ✅ Step F: PO appears in ready list (total_ready=5, items[0].qty_ready=5)
+      ✅ Step G: Auth verification (401 unauth, 200 for all roles)
+      ✅ Step H: Partial-ready case (2 items, only 1 ready → PO NOT in list)
+      ✅ Step I: Mark-shipped as admin (PO disappears from list)
+      ✅ Step J: Mark-shipped auth (staff/guest/owner → 403)
+      ✅ Step K: Mark-shipped idempotent (200 OK on second call)
+      ✅ Step L: Error cases (invalid po_id → 400, non-existent → 404)
+      ✅ Step M: Unmark-shipped as admin (PO reappears in list)
+      ✅ Step M: Unmark-shipped auth (staff/guest/owner → 403)
+      ✅ Step N: Regression tests (auth, barang, PO, dashboard endpoints)
+      
+      ENDPOINT VERIFICATION:
+      1. GET /api/dashboard/po-ready
+         - Returns correct structure: {count, pos:[{po_id, no_po, total_items, total_qty, total_ready, created_at, items:[{barang_id, nama_barang, qty, qty_ready}]}]}
+         - Logic verified: only includes POs where ALL items have qty_ready >= qty
+         - Excludes marked_shipped POs correctly
+         - Auth: 401 for unauthenticated, 200 for all authenticated roles
+      
+      2. POST /api/dashboard/po-ready/{po_id}/mark-shipped
+         - Admin only (403 for staff/guest/owner)
+         - Returns {ok:true, po_id, no_po}
+         - Idempotent (safe to call multiple times)
+         - Error handling: 400 for invalid ObjectId, 404 for non-existent PO
+         - PO correctly disappears from ready list after marking
+      
+      3. POST /api/dashboard/po-ready/{po_id}/unmark-shipped
+         - Admin only (403 for staff/guest/owner)
+         - Returns {ok:true, po_id, no_po}
+         - PO correctly reappears in ready list (if still qualifies)
+      
+      BUSINESS LOGIC VALIDATION:
+      - Packing map aggregation (_get_packing_map) working correctly
+      - All-items-ready logic: PO only appears when EVERY item reaches packing qty >= PO qty
+      - Partial-ready correctly excluded (tested with 2-item PO, only 1 ready)
+      - Full workflow tested: pengrajin → barang → PO → SPK → barang-masuk → progres (4 stages) → ready notification
+      
+      REGRESSION TESTS:
+      ✅ Auth endpoints (/login, /me) for all 4 roles
+      ✅ GET /barang
+      ✅ GET /po
+      ✅ GET /dashboard/kinerja-pengrajin
+      
+      CONCLUSION: PO Ready-to-Ship notification feature fully functional. All 43 tests passed. No errors in backend logs.
