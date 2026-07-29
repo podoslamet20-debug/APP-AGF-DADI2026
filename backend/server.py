@@ -48,6 +48,11 @@ JWT_ALGORITHM = "HS256"
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+# ===== Health Check =====
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
 # ===== Activity Log Middleware =====
 # Descriptions for common endpoints to make logs readable
 RESOURCE_LABEL = {
