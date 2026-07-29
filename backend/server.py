@@ -248,6 +248,8 @@ class POCreate(BaseModel):
 class BarangMasukItem(BaseModel):
     barang_id: str
     qty_diterima: int = Field(ge=0)
+    pengrajin_id: Optional[str] = None
+    pengrajin_nama: Optional[str] = None
     # Optional passthrough metadata (frontend may include these; ignored server-side for validation)
     nama_barang: Optional[str] = None
     nama_pengrajin: Optional[str] = None
