@@ -2,18 +2,26 @@
 const path = require("path");
 require("dotenv").config();
 
-// Check if we're actually running the craco dev server (`craco start`)
-// rather than a production build (`craco build`). Relying on NODE_ENV alone
-// is unreliable because it can be overridden by the environment, which would
-// cause visual-edits (and its dev-only babel/webpack plugins like
-// react-refresh) to leak into production bundles. Instead, inspect the
-// actual CLI command being invoked.
-const cracoArgs = process.argv.slice(2);
-const isBuildCommand = cracoArgs.includes("build");
-const isStartCommand = cracoArgs.includes("start");
-const isDevServer =
-  isStartCommand ||
-  (!isBuildCommand && process.env.NODE_ENV !== "production");
+// Determine whether we're actually running the craco dev server
+// (`craco start`) as opposed to a production build (`craco build`).
+//
+// Relying on NODE_ENV alone is unreliable — it can be set to "development"
+// (or left unset) in CI/build environments, which would incorrectly cause
+// visual-edits (and its dev-only babel/webpack plugins like react-refresh)
+// to leak into the production bundle. Instead, inspect the actual CLI
+// command being invoked via process.argv.
+const isBuildCommand = process.argv.includes("build");
+const isStartCommand = process.argv.includes("start");
+
+// If `craco build` is being run, this is unconditionally a production
+// build — never enable the dev server / visual-edits path, regardless of
+// NODE_ENV.
+let isDevServer;
+if (isBuildCommand) {
+  isDevServer = false;
+} else {
+  isDevServer = isStartCommand;
+}
 
 // Environment variable overrides
 const config = {
@@ -137,8 +145,15 @@ webpackConfig.devServer = (devServerConfig) => {
   return devServerConfig;
 };
 
-// Wrap with visual edits (automatically adds babel plugin, dev server, and overlay in dev mode)
-if (isDevServer) {
+// Wrap with visual edits (automatically adds babel plugin, dev server, and overlay in dev mode).
+// Explicitly skip this entirely for production builds (`craco build`) so that
+// @emergentbase/visual-edits and its dev-only react-refresh plugin can never
+// end up in the production bundle.
+if (isBuildCommand) {
+  console.log(
+    "[visual-edits] Skipping visual-edits — production build (`craco build`) detected."
+  );
+} else if (isDevServer) {
   try {
     const { withVisualEdits } = require("@emergentbase/visual-edits/craco");
     webpackConfig = withVisualEdits(webpackConfig);
