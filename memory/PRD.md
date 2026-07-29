@@ -12,6 +12,11 @@ React + Tailwind + Shadcn UI · FastAPI + Motor MongoDB · JWT auth · ReportLab
 
 ## Changelog
 
+### Feb 2026 — Iter 23 (current) — Portable Storage
+- **File upload → MongoDB GridFS** (was Emergent Object Storage). Portable to Railway/any MongoDB host.
+- No more `EMERGENT_LLM_KEY` dependency for file uploads. Files stored in `fs.files` + `fs.chunks` collections.
+- `put_object`/`get_object`/`delete_object` helpers use `pymongo.GridFS` (sync, compatible with existing ReportLab PDF helpers).
+
 ### Feb 2026 — Iter 22 (current)
 - **Dashboard Kinerja Pengrajin** (P2 shipped): Monthly ranking. Metrics: qty_selesai (packing count in month), qty_masuk (BM in month), on_time_rate (% SPKs with deadline in month completed by deadline). Badges: MVP (top 3), Produktif, Perlu Improvement, Belum ada aktivitas.
 - Endpoint: `GET /api/dashboard/kinerja-pengrajin?month=YYYY-MM`.

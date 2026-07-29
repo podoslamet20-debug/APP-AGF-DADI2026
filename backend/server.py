@@ -3,6 +3,8 @@ from fastapi.responses import StreamingResponse, FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import MongoClient
+from gridfs import GridFS
 from bson import ObjectId
 import os
 import logging
@@ -29,16 +31,19 @@ import xlsxwriter
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
+# MongoDB connection (async for FastAPI endpoints)
 mongo_url = os.environ['MONGO_URL']
+db_name = os.environ['DB_NAME']
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[db_name]
 
-# Object Storage Setup
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+# Sync MongoDB + GridFS for file storage (used by sync helpers like ReportLab PDF gen)
+_sync_client = MongoClient(mongo_url)
+_sync_db = _sync_client[db_name]
+fs = GridFS(_sync_db)
+
+# App name (used as path prefix for uploaded files)
 APP_NAME = "agfdata"
-storage_key = None
 
 # JWT Configuration
 JWT_SECRET = os.environ.get("JWT_SECRET", "agfdata-secret-key-change-in-production")
@@ -146,43 +151,39 @@ async def activity_log_middleware(request: Request, call_next):
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ===== Object Storage Functions =====
-def init_storage():
-    global storage_key
-    if storage_key:
-        return storage_key
-    if not EMERGENT_KEY:
-        raise HTTPException(status_code=503, detail="Object storage tidak tersedia (EMERGENT_LLM_KEY belum diset di env)")
-    try:
-        resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-        resp.raise_for_status()
-        storage_key = resp.json()["storage_key"]
-        logger.info("Storage initialized successfully")
-        return storage_key
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Storage init failed: {e}")
-        raise HTTPException(status_code=503, detail=f"Storage init gagal: {e}")
-
+# ===== Object Storage Functions (MongoDB GridFS) =====
+# Portable storage that works on Emergent, Railway, or any MongoDB deployment.
+# Files are stored inside MongoDB (in `fs.files` + `fs.chunks` collections).
 def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data, timeout=120
-    )
-    resp.raise_for_status()
-    return resp.json()
+    """Upload bytes to GridFS. Overwrites any existing file with the same path (filename)."""
+    try:
+        # Remove any previous versions with the same filename (path)
+        for existing in fs.find({"filename": path}):
+            fs.delete(existing._id)
+        fs.put(data, filename=path, contentType=content_type or "application/octet-stream")
+        return {"path": path, "size": len(data)}
+    except Exception as e:
+        logger.error(f"GridFS put_object failed for {path}: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload gagal: {e}")
 
 def get_object(path: str) -> tuple[bytes, str]:
-    key = init_storage()
-    resp = requests.get(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key}, timeout=60
-    )
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+    """Fetch bytes + content_type from GridFS by path (filename)."""
+    grid_file = fs.find_one({"filename": path})
+    if not grid_file:
+        raise FileNotFoundError(f"File not found in storage: {path}")
+    content_type = getattr(grid_file, "contentType", None) or getattr(grid_file, "content_type", None) or "application/octet-stream"
+    return grid_file.read(), content_type
+
+def delete_object(path: str) -> bool:
+    """Delete a file from GridFS. Returns True if deleted, False if not found."""
+    found = False
+    try:
+        for existing in fs.find({"filename": path}):
+            fs.delete(existing._id)
+            found = True
+    except Exception as e:
+        logger.warning(f"GridFS delete_object failed for {path}: {e}")
+    return found
 
 # ===== Auth Functions =====
 def hash_password(password: str) -> str:
@@ -346,15 +347,11 @@ PREV_STAGE = {"grinda": None, "servis": "grinda", "finishing": "servis", "packin
 @app.on_event("startup")
 async def startup_event():
     try:
-        # Initialize storage (non-fatal: app still boots without object storage; uploads will 503 gracefully)
+        # Storage: using MongoDB GridFS — no external service required (works on Railway + Emergent)
         try:
-            if EMERGENT_KEY:
-                init_storage()
-                logger.info("Storage initialized")
-            else:
-                logger.warning("EMERGENT_LLM_KEY not set — object storage disabled. Image upload/serve endpoints will return 503.")
+            logger.info(f"Storage backend: MongoDB GridFS on DB '{db_name}' (files stored in fs.files / fs.chunks)")
         except Exception as e:
-            logger.warning(f"Storage init failed (non-fatal, uploads will 503): {e}")
+            logger.warning(f"Storage log failed (non-fatal): {e}")
         
         # Create indexes
         await db.users.create_index("email", unique=True)
