@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import axios from "axios";
 import { Card } from "@/components/ui/card";
@@ -19,12 +19,12 @@ export default function Dashboard() {
   const [expandedPo, setExpandedPo] = useState(null);
   const [markingId, setMarkingId] = useState(null);
 
-  const loadPoReady = async () => {
+  const loadPoReady = useCallback(async () => {
     try {
       const { data } = await axios.get(`${API}/dashboard/po-ready`);
       setPoReady({ count: data.count || 0, pos: data.pos || [] });
     } catch (e) { console.error("Failed to load PO ready:", e); }
-  };
+  }, [API]);
 
   useEffect(() => {
     const load = async () => {
