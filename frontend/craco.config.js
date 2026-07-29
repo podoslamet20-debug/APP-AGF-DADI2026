@@ -2,9 +2,18 @@
 const path = require("path");
 require("dotenv").config();
 
-// Check if we're in development/preview mode (not production build)
-// Craco sets NODE_ENV=development for start, NODE_ENV=production for build
-const isDevServer = process.env.NODE_ENV !== "production";
+// Check if we're actually running the craco dev server (`craco start`)
+// rather than a production build (`craco build`). Relying on NODE_ENV alone
+// is unreliable because it can be overridden by the environment, which would
+// cause visual-edits (and its dev-only babel/webpack plugins like
+// react-refresh) to leak into production bundles. Instead, inspect the
+// actual CLI command being invoked.
+const cracoArgs = process.argv.slice(2);
+const isBuildCommand = cracoArgs.includes("build");
+const isStartCommand = cracoArgs.includes("start");
+const isDevServer =
+  isStartCommand ||
+  (!isBuildCommand && process.env.NODE_ENV !== "production");
 
 // Environment variable overrides
 const config = {
