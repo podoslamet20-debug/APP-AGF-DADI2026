@@ -20,19 +20,34 @@ export default function RekapData() {
   const [staffing, setStaffing] = useState([]);
   const [staffingSummary, setStaffingSummary] = useState([]);
   const [poList, setPoList] = useState([]);
+  const [pengrajinList, setPengrajinList] = useState([]);
+  const [barangList, setBarangList] = useState([]);
   const [filterTanggal, setFilterTanggal] = useState("");
   const [filterNoPO, setFilterNoPO] = useState("all");
+  const [filterPengrajin, setFilterPengrajin] = useState("all");
+  const [filterBarang, setFilterBarang] = useState("all");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
 
   const load = async () => {
     try {
-      const [poRes, pgRes, brRes, prRes, stRes, poListRes, sumRes] = await Promise.all([
-        axios.get(`${API}/rekap/all-po${filterNoPO !== "all" ? `?no_po=${filterNoPO}` : ""}`),
-        !isGuest ? axios.get(`${API}/rekap/per-pengrajin`) : Promise.resolve({ data: [] }),
+      const params = new URLSearchParams();
+      if (filterNoPO !== "all") params.set("no_po", filterNoPO);
+      if (filterPengrajin !== "all") params.set("pengrajin_id", filterPengrajin);
+      if (filterBarang !== "all") params.set("barang_id", filterBarang);
+      if (filterDateFrom) params.set("date_from", filterDateFrom);
+      if (filterDateTo) params.set("date_to", filterDateTo);
+      const qs = params.toString() ? `?${params.toString()}` : "";
+      const [poRes, pgRes, brRes, prRes, stRes, poListRes, sumRes, pengrRes, barRes] = await Promise.all([
+        axios.get(`${API}/rekap/all-po${qs}`),
+        !isGuest ? axios.get(`${API}/rekap/per-pengrajin${qs}`) : Promise.resolve({ data: [] }),
         axios.get(`${API}/rekap/per-barang`),
         axios.get(`${API}/rekap/progres`),
         axios.get(`${API}/staffing${filterTanggal ? `?tanggal=${filterTanggal}` : ""}`),
         axios.get(`${API}/po`),
         axios.get(`${API}/rekap/staffing-summary${filterNoPO !== "all" ? `?no_po=${filterNoPO}` : ""}`),
+        axios.get(`${API}/pengrajin`),
+        axios.get(`${API}/barang`),
       ]);
       setRekapPO(poRes.data);
       setRekapPengrajin(pgRes.data);
@@ -41,11 +56,13 @@ export default function RekapData() {
       setStaffing(stRes.data);
       setPoList(poListRes.data);
       setStaffingSummary(sumRes.data);
+      setPengrajinList(pengrRes.data);
+      setBarangList(barRes.data);
     } catch (e) { console.error(e); }
   };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [filterTanggal, filterNoPO]);
+  useEffect(() => { load(); }, [filterTanggal, filterNoPO, filterPengrajin, filterBarang, filterDateFrom, filterDateTo]);
 
   const exportPO = (format) => {
     const statusLabel = (r) => {
@@ -164,19 +181,52 @@ export default function RekapData() {
           <Card className="p-6 border border-[#E5E5E5]">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
               <h2 className="text-xl font-bold text-[#1A1A1A]" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>Rekap Semua PO</h2>
-              <div className="flex gap-2 flex-wrap items-end">
-                <div>
-                  <Label className="text-xs">Filter No PO</Label>
-                  <Select value={filterNoPO} onValueChange={setFilterNoPO}>
-                    <SelectTrigger className="w-48" data-testid="filter-no-po"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Semua PO</SelectItem>
-                      {poList.map((p, i) => <SelectItem key={i} value={p.no_po}>{p.no_po}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
+              <div className="flex gap-2 flex-wrap">
                 <Button variant="outline" size="sm" onClick={() => exportPO("csv")} data-testid="export-po-csv"><Download className="w-3 h-3 mr-1" /> CSV</Button>
                 <Button variant="outline" size="sm" onClick={() => exportPO("xlsx")} data-testid="export-po-xlsx"><Download className="w-3 h-3 mr-1" /> Excel</Button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4 p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]" data-testid="rekap-filters">
+              <div>
+                <Label className="text-xs">No PO</Label>
+                <Select value={filterNoPO} onValueChange={setFilterNoPO}>
+                  <SelectTrigger data-testid="filter-no-po"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua PO</SelectItem>
+                    {poList.map((p, i) => <SelectItem key={i} value={p.no_po}>{p.no_po}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Barang</Label>
+                <Select value={filterBarang} onValueChange={setFilterBarang}>
+                  <SelectTrigger data-testid="filter-barang"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Barang</SelectItem>
+                    {barangList.map((b) => <SelectItem key={b._id} value={b._id}>{b.nama_barang}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Pengrajin</Label>
+                <Select value={filterPengrajin} onValueChange={setFilterPengrajin}>
+                  <SelectTrigger data-testid="filter-pengrajin"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Pengrajin</SelectItem>
+                    {pengrajinList.map((p) => <SelectItem key={p._id} value={p._id}>{p.nama}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Dari Tanggal</Label>
+                <Input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)} data-testid="filter-date-from" />
+              </div>
+              <div>
+                <Label className="text-xs">Sampai Tanggal</Label>
+                <Input type="date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)} data-testid="filter-date-to" />
+              </div>
+              <div className="col-span-2 md:col-span-5">
+                <Button variant="outline" size="sm" onClick={() => { setFilterNoPO("all"); setFilterBarang("all"); setFilterPengrajin("all"); setFilterDateFrom(""); setFilterDateTo(""); }} data-testid="reset-rekap-filters">Reset Filter</Button>
               </div>
             </div>
             <div className="overflow-x-auto">

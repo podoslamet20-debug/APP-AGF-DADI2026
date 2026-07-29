@@ -48,22 +48,33 @@ export default function BarangMasuk() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [search]);
 
-  // Build rows from PO items: split each item into rows per SPK allocation (per pengrajin)
+  // Build rows from PO items: aggregate all SPK lines per (barang, pengrajin)
   const buildRowsFromPO = (po, existingBmMap = new Map()) => {
     const rows = [];
     const poSpks = spks.filter(s => s.items?.some(si => si.no_po === po.no_po));
     for (const poItem of po.items || []) {
-      // Find all SPK allocations for this PO+barang
-      const allocs = [];
+      // Aggregate SPK qty per pengrajin_id for this PO+barang
+      const allocMap = new Map();  // pengrajin_id -> {pengrajin_nama, alloc_qty}
       for (const spk of poSpks) {
         for (const si of spk.items || []) {
-          if (si.no_po === po.no_po && si.barang_id === poItem.barang_id) {
+          if (si.no_po !== po.no_po || si.barang_id !== poItem.barang_id) continue;
+          // New schema
+          if (si.pengrajin_id) {
+            const cur = allocMap.get(si.pengrajin_id) || { pengrajin_nama: si.pengrajin_nama || si.nama_pengrajin || "", alloc_qty: 0 };
+            cur.alloc_qty += parseInt(si.qty) || 0;
+            allocMap.set(si.pengrajin_id, cur);
+          } else {
+            // Legacy allocations[]
             for (const a of si.allocations || []) {
-              allocs.push({ pengrajin_id: a.pengrajin_id, pengrajin_nama: a.pengrajin_nama, alloc_qty: a.qty });
+              if (!a.pengrajin_id) continue;
+              const cur = allocMap.get(a.pengrajin_id) || { pengrajin_nama: a.pengrajin_nama || "", alloc_qty: 0 };
+              cur.alloc_qty += parseInt(a.qty) || 0;
+              allocMap.set(a.pengrajin_id, cur);
             }
           }
         }
       }
+      const allocs = [...allocMap.entries()].map(([pid, v]) => ({ pengrajin_id: pid, pengrajin_nama: v.pengrajin_nama, alloc_qty: v.alloc_qty }));
       if (allocs.length === 0) {
         // No SPK allocation: create a single "unassigned" row (legacy)
         rows.push({

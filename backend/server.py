@@ -302,9 +302,13 @@ class SPKItem(BaseModel):
     spesifikasi: Optional[str] = ""
     qty: int = Field(ge=1)
     no_po: Optional[str] = ""
-    nama_pengrajin: Optional[str] = ""  # DEPRECATED (kept for legacy PDF)
-    pengrajin_list: Optional[List[str]] = Field(default_factory=list)  # DEPRECATED
-    allocations: List[SPKAllocation] = Field(default_factory=list)  # NEW: multi-pengrajin split
+    # NEW single-pengrajin-per-line model (recommended):
+    pengrajin_id: Optional[str] = None
+    pengrajin_nama: Optional[str] = ""
+    # DEPRECATED fields (kept for legacy display):
+    nama_pengrajin: Optional[str] = ""
+    pengrajin_list: Optional[List[str]] = Field(default_factory=list)
+    allocations: List[SPKAllocation] = Field(default_factory=list)  # legacy multi-alloc
     harga: Optional[float] = 0
     gambar_path: Optional[str] = None
     catatan: Optional[str] = ""
@@ -979,14 +983,41 @@ async def create_staffing(staffing: StaffingCreate, user: dict = Depends(get_cur
     return doc
 
 @api_router.get("/staffing")
-async def get_staffing(tanggal: Optional[str] = None, user: dict = Depends(get_current_user)):
-    query = {}
+async def get_staffing(
+    tanggal: Optional[str] = None,
+    no_po: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    pengrajin_id: Optional[str] = None,
+    barang_id: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    query: Dict[str, Any] = {}
     if tanggal:
         query["tanggal_keluar"] = tanggal
+    elif date_from or date_to:
+        query["tanggal_keluar"] = {}
+        if date_from: query["tanggal_keluar"]["$gte"] = date_from
+        if date_to: query["tanggal_keluar"]["$lte"] = date_to
+    if no_po:
+        query["no_po"] = {"$regex": no_po, "$options": "i"}
     
     items = await db.staffing.find(query).to_list(1000)
     for item in items:
         item["_id"] = str(item["_id"])
+    
+    # In-memory filter by barang_id/pengrajin_id (items are nested)
+    if barang_id or pengrajin_id:
+        filtered = []
+        for st in items:
+            keep = False
+            for it in st.get("items", []):
+                if barang_id and it.get("barang_id") != barang_id: continue
+                if pengrajin_id and (it.get("pengrajin_id") or "") != pengrajin_id: continue
+                keep = True; break
+            if keep:
+                filtered.append(st)
+        items = filtered
     
     if user["role"] in ["staff", "guest"]:
         for st in items:
@@ -1002,32 +1033,79 @@ async def get_staffing(tanggal: Optional[str] = None, user: dict = Depends(get_c
     return items
 
 # ===== SPK Routes =====
-async def _validate_spk_allocations(items):
-    """Validate: each item's allocations sum equals item.qty, pengrajin_ids valid."""
+async def _get_po_qty_by_barang(no_po: str, barang_id: str) -> int:
+    """Get PO qty for a specific (no_po, barang_id)."""
+    po = await db.po.find_one({"no_po": no_po})
+    if not po:
+        return 0
+    for it in po.get("items", []):
+        if it.get("barang_id") == barang_id:
+            return int(it.get("qty", 0) or 0)
+    return 0
+
+
+async def _get_spk_used_qty(no_po: str, barang_id: str, exclude_spk_id: Optional[str] = None) -> int:
+    """Sum qty across all SPK items for (no_po, barang_id), optionally excluding one SPK."""
+    total = 0
+    async for spk in db.spk.find({"items.no_po": no_po}):
+        if exclude_spk_id and str(spk.get("_id")) == exclude_spk_id:
+            continue
+        for it in spk.get("items", []):
+            if it.get("no_po") == no_po and it.get("barang_id") == barang_id:
+                total += int(it.get("qty", 0) or 0)
+    return total
+
+
+async def _validate_spk_items(items, exclude_spk_id: Optional[str] = None):
+    """Validate: each item has pengrajin_id, and cumulative SPK qty per (no_po, barang_id) ≤ PO qty."""
+    # Aggregate qty within this payload per (no_po, barang_id)
+    payload_agg: Dict[tuple, int] = {}
     for it in items:
-        allocs = it.allocations or []
-        if not allocs:
-            raise HTTPException(status_code=400, detail=f"Item '{it.nama_barang}' wajib punya minimal 1 alokasi pengrajin")
-        total = sum(int(a.qty or 0) for a in allocs)
-        if total != it.qty:
-            raise HTTPException(status_code=400, detail=f"Total alokasi pengrajin ({total}) untuk '{it.nama_barang}' harus sama dengan qty item ({it.qty})")
-        # Validate pengrajin_ids exist
-        for a in allocs:
-            try:
-                p = await db.pengrajin.find_one({"_id": ObjectId(a.pengrajin_id)})
-            except Exception:
-                p = None
-            if not p:
-                raise HTTPException(status_code=400, detail=f"Pengrajin ID '{a.pengrajin_id}' tidak ditemukan untuk item '{it.nama_barang}'")
+        # Accept legacy allocations by flattening (each allocation becomes an implicit line)
+        if not it.pengrajin_id and it.allocations:
+            it.pengrajin_id = it.allocations[0].pengrajin_id
+            it.pengrajin_nama = it.allocations[0].pengrajin_nama
+        if not it.pengrajin_id:
+            raise HTTPException(status_code=400, detail=f"Item '{it.nama_barang}' wajib pilih pengrajin")
+        # Validate pengrajin exists
+        try:
+            p = await db.pengrajin.find_one({"_id": ObjectId(it.pengrajin_id)})
+        except Exception:
+            p = None
+        if not p:
+            raise HTTPException(status_code=400, detail=f"Pengrajin '{it.pengrajin_nama or it.pengrajin_id}' tidak ditemukan untuk '{it.nama_barang}'")
+        # Sync pengrajin_nama from DB (source of truth)
+        it.pengrajin_nama = p.get("nama", it.pengrajin_nama or "")
+        # Require no_po and barang_id for cross-SPK checks
+        if not it.no_po or not it.barang_id:
+            continue  # skip cross-check when info missing (manual entry)
+        key = (it.no_po, it.barang_id)
+        payload_agg[key] = payload_agg.get(key, 0) + int(it.qty)
+    
+    # Compare cumulative (payload + other SPKs) ≤ PO qty
+    for (no_po, barang_id), payload_qty in payload_agg.items():
+        po_qty = await _get_po_qty_by_barang(no_po, barang_id)
+        if po_qty == 0:
+            raise HTTPException(status_code=400, detail=f"PO {no_po} tidak punya barang tersebut, atau qty PO = 0")
+        other_used = await _get_spk_used_qty(no_po, barang_id, exclude_spk_id=exclude_spk_id)
+        if payload_qty + other_used > po_qty:
+            sisa = max(po_qty - other_used, 0)
+            raise HTTPException(status_code=400, detail=f"Total alokasi SPK untuk barang di PO {no_po} melebihi qty PO ({po_qty}). Sudah dialokasikan di SPK lain: {other_used}. Sisa alokasi: {sisa}. Diminta: {payload_qty}")
 
 
 @api_router.post("/spk")
 async def create_spk(spk: SPKCreate, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    await _validate_spk_allocations(spk.items)
+    await _validate_spk_items(spk.items)
     
     doc = spk.model_dump()
+    # Backward-compat: ensure allocations mirror single pengrajin for legacy readers
+    for it in doc.get("items", []):
+        if it.get("pengrajin_id") and not it.get("allocations"):
+            it["allocations"] = [{"pengrajin_id": it["pengrajin_id"], "pengrajin_nama": it.get("pengrajin_nama", ""), "qty": it["qty"]}]
+        if it.get("pengrajin_nama") and not it.get("nama_pengrajin"):
+            it["nama_pengrajin"] = it["pengrajin_nama"]
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
     doc["created_by"] = user["_id"]
     
@@ -1062,7 +1140,13 @@ async def get_spk(search: Optional[str] = None, user: dict = Depends(get_current
 async def update_spk(spk_id: str, spk: SPKCreate, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    await _validate_spk_allocations(spk.items)
+    await _validate_spk_items(spk.items, exclude_spk_id=spk_id)
+    doc = spk.model_dump()
+    for it in doc.get("items", []):
+        if it.get("pengrajin_id") and not it.get("allocations"):
+            it["allocations"] = [{"pengrajin_id": it["pengrajin_id"], "pengrajin_nama": it.get("pengrajin_nama", ""), "qty": it["qty"]}]
+        if it.get("pengrajin_nama") and not it.get("nama_pengrajin"):
+            it["nama_pengrajin"] = it["pengrajin_nama"]
     
     await db.spk.update_one(
         {"_id": ObjectId(spk_id)},
@@ -1438,8 +1522,20 @@ async def export_progres_pdf(tanggal: Optional[str] = None, user: dict = Depends
 
 # ===== Rekap Data Routes =====
 @api_router.get("/rekap/all-po")
-async def get_rekap_all_po(no_po: Optional[str] = None, user: dict = Depends(get_current_user)):
-    query = {"no_po": no_po} if no_po else {}
+async def get_rekap_all_po(
+    no_po: Optional[str] = None,
+    barang_id: Optional[str] = None,
+    pengrajin_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    query: Dict[str, Any] = {}
+    if no_po: query["no_po"] = {"$regex": no_po, "$options": "i"}
+    if date_from or date_to:
+        query["tanggal_terima"] = {}
+        if date_from: query["tanggal_terima"]["$gte"] = date_from
+        if date_to: query["tanggal_terima"]["$lte"] = date_to
     pos = await db.po.find(query).to_list(1000)
     staffing = await db.staffing.find({}).to_list(1000)
     spks = await db.spk.find({}).to_list(1000)
@@ -1482,6 +1578,23 @@ async def get_rekap_all_po(no_po: Optional[str] = None, user: dict = Depends(get
     for po in pos:
         status = po_status(po)
         for item in po.get("items", []):
+            if barang_id and item.get("barang_id") != barang_id:
+                continue
+            # If filter by pengrajin: only include when SPK/BM has this pengrajin_id for this barang
+            if pengrajin_id:
+                found = False
+                for spk in spks:
+                    for si in spk.get("items", []):
+                        if si.get("no_po") == po["no_po"] and si.get("barang_id") == item.get("barang_id"):
+                            if si.get("pengrajin_id") == pengrajin_id:
+                                found = True
+                                break
+                            for a in si.get("allocations", []) or []:
+                                if a.get("pengrajin_id") == pengrajin_id:
+                                    found = True; break
+                    if found: break
+                if not found:
+                    continue
             staffing_qty = item.get("qty_staffed", 0) or 0
             kurang_kirim = item["qty"] - staffing_qty
             result.append({
@@ -1503,7 +1616,14 @@ async def get_rekap_all_po(no_po: Optional[str] = None, user: dict = Depends(get
     return result
 
 @api_router.get("/rekap/per-pengrajin")
-async def get_rekap_per_pengrajin(user: dict = Depends(get_current_user)):
+async def get_rekap_per_pengrajin(
+    pengrajin_id: Optional[str] = None,
+    no_po: Optional[str] = None,
+    barang_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
     if user["role"] == "guest":
         raise HTTPException(status_code=403, detail="Not authorized")
     
@@ -1512,19 +1632,45 @@ async def get_rekap_per_pengrajin(user: dict = Depends(get_current_user)):
     for s in spks: s["_id"] = str(s["_id"])
     for b in barang_masuk: b["_id"] = str(b["_id"])
     
-    result = {}
+    # Build result keyed by pengrajin nama (grouping)
+    result: Dict[str, Dict[str, Any]] = {}
+    
+    def _match_filters(no_po_val, bid, pid, pnama):
+        if no_po and no_po_val and no_po not in no_po_val: return False
+        if barang_id and bid != barang_id: return False
+        if pengrajin_id and pid != pengrajin_id: return False
+        return True
+    
     for spk in spks:
         for item in spk.get("items", []):
-            pengrajin = item.get("nama_pengrajin", "Unknown")
-            if pengrajin not in result:
-                result[pengrajin] = {"spk_qty": 0, "masuk_qty": 0}
-            result[pengrajin]["spk_qty"] += item.get("qty", 0)
+            # New schema
+            pid = item.get("pengrajin_id") or ""
+            pnama = item.get("pengrajin_nama") or item.get("nama_pengrajin") or "Unknown"
+            if pid or pnama != "Unknown":
+                if not _match_filters(item.get("no_po"), item.get("barang_id"), pid, pnama): continue
+                key = pnama
+                result.setdefault(key, {"pengrajin_id": pid, "spk_qty": 0, "masuk_qty": 0})
+                result[key]["spk_qty"] += int(item.get("qty", 0) or 0)
+            # Legacy allocations
+            for a in item.get("allocations", []) or []:
+                apid = a.get("pengrajin_id") or ""
+                anama = a.get("pengrajin_nama") or "Unknown"
+                if not _match_filters(item.get("no_po"), item.get("barang_id"), apid, anama): continue
+                if apid == pid: continue  # already counted above (new schema)
+                key = anama
+                result.setdefault(key, {"pengrajin_id": apid, "spk_qty": 0, "masuk_qty": 0})
+                result[key]["spk_qty"] += int(a.get("qty", 0) or 0)
     
     for bm in barang_masuk:
+        if date_from and (bm.get("tanggal_masuk") or "") < date_from: continue
+        if date_to and (bm.get("tanggal_masuk") or "") > date_to: continue
         for item in bm.get("items", []):
-            pengrajin = item.get("nama_pengrajin", "Unknown")
-            if pengrajin in result:
-                result[pengrajin]["masuk_qty"] += item.get("qty_diterima", 0)
+            pid = item.get("pengrajin_id") or ""
+            pnama = item.get("pengrajin_nama") or item.get("nama_pengrajin") or "Unknown"
+            if not _match_filters(bm.get("no_po"), item.get("barang_id"), pid, pnama): continue
+            key = pnama
+            if key in result:
+                result[key]["masuk_qty"] += int(item.get("qty_diterima", 0) or 0)
     
     return [{"pengrajin": k, **v, "remaining": v["spk_qty"] - v["masuk_qty"]} for k, v in result.items()]
 
@@ -2060,7 +2206,8 @@ async def delete_pengrajin(pid: str, user: dict = Depends(get_current_user)):
 
 # Helper: get SPK allocation qty for (po_id, barang_id, pengrajin_id)
 async def _get_spk_allocation(po_id: str, barang_id: str, pengrajin_id: str) -> int:
-    """Total qty allocated to this pengrajin for this barang in SPK(s) tied to this PO."""
+    """Total qty allocated to this pengrajin for this barang across all SPKs tied to this PO.
+    Supports both new schema (SPKItem.pengrajin_id) and legacy (allocations[])."""
     po = await db.po.find_one({"_id": ObjectId(po_id)}) if po_id else None
     if not po:
         return 0
@@ -2069,10 +2216,37 @@ async def _get_spk_allocation(po_id: str, barang_id: str, pengrajin_id: str) -> 
     async for spk in db.spk.find({"items.no_po": no_po}):
         for it in spk.get("items", []):
             if it.get("no_po") == no_po and it.get("barang_id") == barang_id:
-                for a in it.get("allocations", []) or []:
-                    if a.get("pengrajin_id") == pengrajin_id:
-                        total += int(a.get("qty", 0) or 0)
+                # New schema: pengrajin_id directly on item
+                if it.get("pengrajin_id") == pengrajin_id:
+                    total += int(it.get("qty", 0) or 0)
+                # Legacy: allocations array
+                elif not it.get("pengrajin_id"):
+                    for a in it.get("allocations", []) or []:
+                        if a.get("pengrajin_id") == pengrajin_id:
+                            total += int(a.get("qty", 0) or 0)
     return total
+
+
+async def _get_spk_allocations_by_barang(no_po: str, barang_id: str) -> list:
+    """Return list of {pengrajin_id, pengrajin_nama, qty} for a (no_po, barang_id)."""
+    result: Dict[str, Dict[str, Any]] = {}  # pengrajin_id -> {nama, qty}
+    async for spk in db.spk.find({"items.no_po": no_po}):
+        for it in spk.get("items", []):
+            if it.get("no_po") != no_po or it.get("barang_id") != barang_id:
+                continue
+            if it.get("pengrajin_id"):
+                pid = it["pengrajin_id"]
+                nama = it.get("pengrajin_nama") or it.get("nama_pengrajin") or ""
+                result.setdefault(pid, {"pengrajin_id": pid, "pengrajin_nama": nama, "qty": 0})
+                result[pid]["qty"] += int(it.get("qty", 0) or 0)
+            else:
+                for a in it.get("allocations", []) or []:
+                    pid = a.get("pengrajin_id")
+                    if not pid: continue
+                    nama = a.get("pengrajin_nama") or ""
+                    result.setdefault(pid, {"pengrajin_id": pid, "pengrajin_nama": nama, "qty": 0})
+                    result[pid]["qty"] += int(a.get("qty", 0) or 0)
+    return list(result.values())
 
 
 async def _get_bm_qty_per_pengrajin(po_id: str, barang_id: str, pengrajin_id: str, exclude_bm_id: Optional[str] = None) -> int:
@@ -2095,6 +2269,12 @@ async def _get_progres_stage_per_pengrajin(po_id: str, barang_id: str, pengrajin
     async for e in db.progres.find(match):
         total += int(e.get("qty", 0) or 0)
     return total
+
+
+@api_router.get("/spk/allocations")
+async def get_spk_allocations(no_po: str, barang_id: str, user: dict = Depends(get_current_user)):
+    """Return aggregated pengrajin allocations for a (no_po, barang_id) — used by BM & Progres UI."""
+    return await _get_spk_allocations_by_barang(no_po, barang_id)
 
 
 # ===== Additional Rekap Endpoints =====
@@ -2305,20 +2485,58 @@ async def export_all_bm_pdf(search: Optional[str] = None, user: dict = Depends(g
     return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": "attachment; filename=barang-masuk-all.pdf"})
 
 
+async def _filter_staffing(no_po, date_from, date_to, pengrajin_id, barang_id, tanggal=None):
+    query: Dict[str, Any] = {}
+    if tanggal:
+        query["tanggal_keluar"] = tanggal
+    elif date_from or date_to:
+        query["tanggal_keluar"] = {}
+        if date_from: query["tanggal_keluar"]["$gte"] = date_from
+        if date_to: query["tanggal_keluar"]["$lte"] = date_to
+    if no_po:
+        query["no_po"] = {"$regex": no_po, "$options": "i"}
+    items = await db.staffing.find(query).to_list(1000)
+    if barang_id or pengrajin_id:
+        filtered = []
+        for st in items:
+            keep = False
+            for it in st.get("items", []):
+                if barang_id and it.get("barang_id") != barang_id: continue
+                if pengrajin_id and (it.get("pengrajin_id") or "") != pengrajin_id: continue
+                keep = True; break
+            if keep: filtered.append(st)
+        items = filtered
+    return items
+
+
 @api_router.get("/export/staffing/pdf")
-async def export_all_staffing_pdf(user: dict = Depends(get_current_user)):
-    items = await db.staffing.find({}).to_list(1000)
+async def export_all_staffing_pdf(
+    no_po: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    pengrajin_id: Optional[str] = None,
+    barang_id: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    items = await _filter_staffing(no_po, date_from, date_to, pengrajin_id, barang_id)
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=8*mm, rightMargin=8*mm)
     story = []
     styles = getSampleStyleSheet()
-    _brand_header(story, "REKAP STAFFING", "Semua data staffing", styles)
+    subtitle = "Semua data staffing"
+    filters = []
+    if no_po: filters.append(f"PO: {no_po}")
+    if date_from or date_to: filters.append(f"Tanggal: {date_from or '...'} → {date_to or '...'}")
+    if filters: subtitle = " | ".join(filters)
+    _brand_header(story, "REKAP STAFFING", subtitle, styles)
     body_style = ParagraphStyle('body', parent=styles["BodyText"], fontSize=8, leading=10)
     data = [["Foto", "No PO", "Tanggal", "Barang", "Pengrajin", "Qty"]]
     for st in items:
         for item in st.get("items", []):
+            if barang_id and item.get("barang_id") != barang_id: continue
+            if pengrajin_id and (item.get("pengrajin_id") or "") != pengrajin_id: continue
             img = _fetch_image_flowable(item.get("gambar_path"), 16) or Paragraph("-", body_style)
-            data.append([img, st.get("no_po",""), st.get("tanggal_keluar",""), Paragraph(item.get("nama_barang",""), body_style), Paragraph(item.get("nama_pengrajin",""), body_style), str(item.get("qty",0))])
+            data.append([img, st.get("no_po",""), st.get("tanggal_keluar",""), Paragraph(item.get("nama_barang",""), body_style), Paragraph(item.get("pengrajin_nama") or item.get("nama_pengrajin",""), body_style), str(item.get("qty",0))])
     table = Table(data, repeatRows=1, colWidths=[18*mm, 28*mm, 24*mm, 50*mm, 34*mm, 14*mm])
     table.setStyle(TableStyle([("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E5E5E5")), ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#8B5A2B")), ("TEXTCOLOR", (0,0), (-1,0), colors.white), ("VALIGN", (0,0), (-1,-1), "MIDDLE")]))
     story.append(table)
@@ -2328,16 +2546,25 @@ async def export_all_staffing_pdf(user: dict = Depends(get_current_user)):
 
 
 @api_router.get("/export/staffing/excel")
-async def export_staffing_excel(user: dict = Depends(get_current_user)):
-    items = await db.staffing.find({}).to_list(1000)
+async def export_staffing_excel(
+    no_po: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    pengrajin_id: Optional[str] = None,
+    barang_id: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    items = await _filter_staffing(no_po, date_from, date_to, pengrajin_id, barang_id)
     rows = []
     for st in items:
         for item in st.get("items", []):
+            if barang_id and item.get("barang_id") != barang_id: continue
+            if pengrajin_id and (item.get("pengrajin_id") or "") != pengrajin_id: continue
             rows.append({
                 "no_po": st.get("no_po",""),
                 "tanggal_keluar": st.get("tanggal_keluar",""),
                 "nama_barang": item.get("nama_barang",""),
-                "nama_pengrajin": item.get("nama_pengrajin",""),
+                "nama_pengrajin": item.get("pengrajin_nama") or item.get("nama_pengrajin",""),
                 "qty": item.get("qty",0),
                 "gambar_path": item.get("gambar_path"),
             })

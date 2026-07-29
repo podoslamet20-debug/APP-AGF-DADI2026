@@ -82,19 +82,29 @@ export default function ProgresBarang() {
   const selectedProgres = progresList.find(p => p.po_id === form.po_id)?.items.find(i => i.barang_id === form.item_id);
   const selectedPO = poList.find(p => (p._id || p.id) === form.po_id);
 
-  // Get allocations (pengrajin list) for currently selected PO+barang
+  // Get aggregated pengrajin allocations for currently selected PO+barang
   const currentAllocations = (() => {
     if (!form.po_id || !form.item_id || !selectedPO) return [];
     const poSpks = spks.filter(s => s.items?.some(si => si.no_po === selectedPO.no_po));
-    const allocs = [];
+    const map = new Map();  // pengrajin_id -> {pengrajin_id, pengrajin_nama, qty}
     for (const spk of poSpks) {
       for (const si of spk.items || []) {
-        if (si.no_po === selectedPO.no_po && si.barang_id === form.item_id) {
-          for (const a of si.allocations || []) allocs.push(a);
+        if (si.no_po !== selectedPO.no_po || si.barang_id !== form.item_id) continue;
+        if (si.pengrajin_id) {
+          const cur = map.get(si.pengrajin_id) || { pengrajin_id: si.pengrajin_id, pengrajin_nama: si.pengrajin_nama || si.nama_pengrajin || "", qty: 0 };
+          cur.qty += parseInt(si.qty) || 0;
+          map.set(si.pengrajin_id, cur);
+        } else {
+          for (const a of si.allocations || []) {
+            if (!a.pengrajin_id) continue;
+            const cur = map.get(a.pengrajin_id) || { pengrajin_id: a.pengrajin_id, pengrajin_nama: a.pengrajin_nama || "", qty: 0 };
+            cur.qty += parseInt(a.qty) || 0;
+            map.set(a.pengrajin_id, cur);
+          }
         }
       }
     }
-    return allocs;
+    return [...map.values()];
   })();
 
   // Compute upstream/max for the current form.stage

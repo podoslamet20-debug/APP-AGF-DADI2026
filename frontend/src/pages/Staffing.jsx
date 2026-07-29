@@ -15,27 +15,48 @@ export default function Staffing() {
   const { API, canEditPartial, canSeeCraftsman } = useAuth();
   const [items, setItems] = useState([]);
   const [pos, setPos] = useState([]);
+  const [pengrajinList, setPengrajinList] = useState([]);
+  const [barangList, setBarangList] = useState([]);
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [preview, setPreview] = useState(null);
   const [search, setSearch] = useState("");
+  const [filterNoPO, setFilterNoPO] = useState("all");
+  const [filterPengrajin, setFilterPengrajin] = useState("all");
+  const [filterBarang, setFilterBarang] = useState("all");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
   const [selectedPO, setSelectedPO] = useState(null);
   const [form, setForm] = useState({ po_id: "", tanggal_keluar: "", items: [] });
 
   const load = async () => {
     try {
-      const [stRes, poRes] = await Promise.all([axios.get(`${API}/staffing`), axios.get(`${API}/po`)]);
+      const params = new URLSearchParams();
+      if (filterNoPO !== "all") params.set("no_po", filterNoPO);
+      if (filterPengrajin !== "all") params.set("pengrajin_id", filterPengrajin);
+      if (filterBarang !== "all") params.set("barang_id", filterBarang);
+      if (filterDateFrom) params.set("date_from", filterDateFrom);
+      if (filterDateTo) params.set("date_to", filterDateTo);
+      const qs = params.toString() ? `?${params.toString()}` : "";
+      const [stRes, poRes, pgRes, brRes] = await Promise.all([
+        axios.get(`${API}/staffing${qs}`),
+        axios.get(`${API}/po`),
+        axios.get(`${API}/pengrajin`),
+        axios.get(`${API}/barang`),
+      ]);
       let stData = stRes.data;
       if (search) {
         stData = stData.filter(st => st.no_po?.toLowerCase().includes(search.toLowerCase()));
       }
       setItems(stData);
       setPos(poRes.data);
+      setPengrajinList(pgRes.data);
+      setBarangList(brRes.data);
     } catch (e) { console.error(e); }
   };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [search]);
+  useEffect(() => { load(); }, [search, filterNoPO, filterPengrajin, filterBarang, filterDateFrom, filterDateTo]);
 
   const selectPO = (poId) => {
     const po = pos.find(p => (p._id || p.id) === poId);
@@ -129,9 +150,18 @@ export default function Staffing() {
     } catch (e) { toast.error("Gagal hapus"); }
   };
 
+  const buildQS = () => {
+    const p = new URLSearchParams();
+    if (filterNoPO !== "all") p.set("no_po", filterNoPO);
+    if (filterPengrajin !== "all") p.set("pengrajin_id", filterPengrajin);
+    if (filterBarang !== "all") p.set("barang_id", filterBarang);
+    if (filterDateFrom) p.set("date_from", filterDateFrom);
+    if (filterDateTo) p.set("date_to", filterDateTo);
+    return p.toString() ? `?${p.toString()}` : "";
+  };
   const downloadPDF = (id) => window.open(`${API}/export/staffing/${id}/pdf`, '_blank');
-  const downloadAllPDF = () => window.open(`${API}/export/staffing/pdf`, '_blank');
-  const downloadExcel = () => window.open(`${API}/export/staffing/excel`, '_blank');
+  const downloadAllPDF = () => window.open(`${API}/export/staffing/pdf${buildQS()}`, '_blank');
+  const downloadExcel = () => window.open(`${API}/export/staffing/excel${buildQS()}`, '_blank');
   const printPage = () => window.print();
 
   return (
@@ -203,9 +233,55 @@ export default function Staffing() {
       </div>
 
       <Card className="p-4 border border-[#E5E5E5]">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#5C5C5C]" />
-          <Input placeholder="Cari No PO..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" data-testid="search-staffing-input" />
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+          <div className="md:col-span-2 relative">
+            <Label className="text-xs">Cari No PO</Label>
+            <Search className="absolute left-3 top-8 w-4 h-4 text-[#5C5C5C]" />
+            <Input placeholder="Cari No PO..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" data-testid="search-staffing-input" />
+          </div>
+          <div>
+            <Label className="text-xs">Filter No PO</Label>
+            <Select value={filterNoPO} onValueChange={setFilterNoPO}>
+              <SelectTrigger data-testid="filter-staffing-po"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Semua PO</SelectItem>
+                {pos.map((p, i) => <SelectItem key={i} value={p.no_po}>{p.no_po}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-xs">Barang</Label>
+            <Select value={filterBarang} onValueChange={setFilterBarang}>
+              <SelectTrigger data-testid="filter-staffing-barang"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Semua Barang</SelectItem>
+                {barangList.map((b) => <SelectItem key={b._id} value={b._id}>{b.nama_barang}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-xs">Pengrajin</Label>
+            <Select value={filterPengrajin} onValueChange={setFilterPengrajin}>
+              <SelectTrigger data-testid="filter-staffing-pengrajin"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Semua Pengrajin</SelectItem>
+                {pengrajinList.map((p) => <SelectItem key={p._id} value={p._id}>{p.nama}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="md:col-span-1 grid grid-cols-2 gap-1">
+            <div>
+              <Label className="text-xs">Dari</Label>
+              <Input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)} data-testid="filter-staffing-date-from" />
+            </div>
+            <div>
+              <Label className="text-xs">Sampai</Label>
+              <Input type="date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)} data-testid="filter-staffing-date-to" />
+            </div>
+          </div>
+        </div>
+        <div className="mt-2">
+          <Button variant="outline" size="sm" onClick={() => { setFilterNoPO("all"); setFilterBarang("all"); setFilterPengrajin("all"); setFilterDateFrom(""); setFilterDateTo(""); setSearch(""); }} data-testid="reset-staffing-filters">Reset Filter</Button>
         </div>
       </Card>
 

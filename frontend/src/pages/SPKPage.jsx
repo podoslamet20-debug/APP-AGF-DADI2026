@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, Search, Trash2, FileText, Download, Package, Edit, Users } from "lucide-react";
+import { Plus, Search, Trash2, FileText, Download, Package, Edit } from "lucide-react";
 
 const emptyForm = { no_spk: "", items: [], catatan_pembayaran: "", owner_perusahaan: "", deadline: "" };
 
@@ -44,9 +44,32 @@ export default function SPKPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [search]);
 
-  const defaultAllocation = (qty) => pengrajinList.length > 0
-    ? [{ pengrajin_id: pengrajinList[0]._id, pengrajin_nama: pengrajinList[0].nama, qty: qty || 1 }]
-    : [{ pengrajin_id: "", pengrajin_nama: "", qty: qty || 1 }];
+  // Compute sisa alokasi PO untuk (no_po, barang_id): PO_qty - sum(qty in other SPK items with same no_po+barang_id) - sum(qty in current form items with same key EXCEPT this one)
+  const getSisaAlokasi = (no_po, barang_id, exceptIdx = -1) => {
+    if (!no_po || !barang_id) return null;
+    const po = poList.find(p => p.no_po === no_po);
+    if (!po) return null;
+    const poItem = po.items.find(i => i.barang_id === barang_id);
+    if (!poItem) return null;
+    let used = 0;
+    // From other SPKs (excluding self when editing)
+    for (const s of spks) {
+      if (editingId && s._id === editingId) continue;
+      for (const it of s.items || []) {
+        if (it.no_po === no_po && it.barang_id === barang_id) {
+          used += parseInt(it.qty) || 0;
+        }
+      }
+    }
+    // From current form items (siblings)
+    (form.items || []).forEach((it, i) => {
+      if (i === exceptIdx) return;
+      if (it.no_po === no_po && it.barang_id === barang_id) {
+        used += parseInt(it.qty) || 0;
+      }
+    });
+    return Math.max((poItem.qty || 0) - used, 0);
+  };
 
   const importFromPO = (poId) => {
     const po = poList.find(p => (p._id || p.id) === poId);
@@ -57,7 +80,8 @@ export default function SPKPage() {
       spesifikasi: i.spesifikasi,
       qty: i.qty,
       no_po: po.no_po,
-      allocations: defaultAllocation(i.qty),
+      pengrajin_id: pengrajinList[0]?._id || "",
+      pengrajin_nama: pengrajinList[0]?.nama || "",
       harga: i.harga_pengrajin || 0,
       gambar_path: i.gambar_path,
       catatan: "",
@@ -66,10 +90,7 @@ export default function SPKPage() {
     toast.success(`${newItems.length} item ditambahkan dari PO ${po.no_po}`);
   };
 
-  const addItem = () => {
-    setForm({ ...form, items: [...form.items, { barang_id: "", nama_barang: "", spesifikasi: "", qty: 1, no_po: "", allocations: defaultAllocation(1), harga: 0, gambar_path: "", catatan: "" }] });
-  };
-
+  const addItem = () => setForm({ ...form, items: [...form.items, { barang_id: "", nama_barang: "", spesifikasi: "", qty: 1, no_po: "", pengrajin_id: "", pengrajin_nama: "", harga: 0, gambar_path: "", catatan: "" }] });
   const removeItem = (idx) => setForm({ ...form, items: form.items.filter((_, i) => i !== idx) });
 
   const selectBarang = (idx, barangId) => {
@@ -82,60 +103,32 @@ export default function SPKPage() {
 
   const updateItem = (idx, key, val) => {
     const items = [...form.items];
-    items[idx][key] = val;
-    // If qty changes, auto-adjust first allocation to sum
-    if (key === "qty" && items[idx].allocations?.length === 1) {
-      items[idx].allocations = [{ ...items[idx].allocations[0], qty: val }];
-    }
-    setForm({ ...form, items });
-  };
-
-  const addAlloc = (idx) => {
-    const items = [...form.items];
-    const used = (items[idx].allocations || []).reduce((s, a) => s + (parseInt(a.qty) || 0), 0);
-    const remaining = Math.max(1, (items[idx].qty || 0) - used);
-    items[idx].allocations = [...(items[idx].allocations || []), { pengrajin_id: "", pengrajin_nama: "", qty: remaining }];
-    setForm({ ...form, items });
-  };
-
-  const removeAlloc = (itemIdx, allocIdx) => {
-    const items = [...form.items];
-    items[itemIdx].allocations = items[itemIdx].allocations.filter((_, i) => i !== allocIdx);
-    setForm({ ...form, items });
-  };
-
-  const updateAlloc = (itemIdx, allocIdx, key, val) => {
-    const items = [...form.items];
     if (key === "pengrajin_id") {
       const pg = pengrajinList.find(p => p._id === val);
-      items[itemIdx].allocations[allocIdx] = { ...items[itemIdx].allocations[allocIdx], pengrajin_id: val, pengrajin_nama: pg?.nama || "" };
+      items[idx] = { ...items[idx], pengrajin_id: val, pengrajin_nama: pg?.nama || "" };
     } else {
-      items[itemIdx].allocations[allocIdx] = { ...items[itemIdx].allocations[allocIdx], [key]: val };
+      items[idx] = { ...items[idx], [key]: val };
     }
     setForm({ ...form, items });
   };
 
   const submit = async () => {
     if (form.items.length === 0) { toast.error("Tambahkan minimal 1 barang"); return; }
-    // Validate: each item allocations sum = item.qty
-    for (const it of form.items) {
-      const sum = (it.allocations || []).reduce((s, a) => s + (parseInt(a.qty) || 0), 0);
-      if (sum !== parseInt(it.qty)) {
-        toast.error(`Alokasi pengrajin untuk '${it.nama_barang}' (${sum}) harus sama dengan qty item (${it.qty})`);
-        return;
-      }
-      for (const a of (it.allocations || [])) {
-        if (!a.pengrajin_id) {
-          toast.error(`Pilih pengrajin untuk semua alokasi di '${it.nama_barang}'`);
-          return;
-        }
-      }
+    for (const [i, it] of form.items.entries()) {
+      if (!it.pengrajin_id) { toast.error(`Pilih pengrajin untuk item '${it.nama_barang || `#${i+1}`}'`); return; }
+      if (!it.qty || it.qty < 1) { toast.error(`Qty item '${it.nama_barang}' minimal 1`); return; }
     }
-    // Backward-compat: set nama_pengrajin = first allocation's name (for PDF)
     const payload = { ...form, items: form.items.map(it => ({
-      ...it,
-      nama_pengrajin: it.allocations?.[0]?.pengrajin_nama || "",
-      allocations: it.allocations.map(a => ({ pengrajin_id: a.pengrajin_id, pengrajin_nama: a.pengrajin_nama, qty: parseInt(a.qty) })),
+      barang_id: it.barang_id,
+      nama_barang: it.nama_barang,
+      spesifikasi: it.spesifikasi,
+      qty: parseInt(it.qty),
+      no_po: it.no_po,
+      pengrajin_id: it.pengrajin_id,
+      pengrajin_nama: it.pengrajin_nama,
+      harga: parseFloat(it.harga) || 0,
+      gambar_path: it.gambar_path,
+      catatan: it.catatan || "",
     })) };
     try {
       if (editingId) {
@@ -156,8 +149,17 @@ export default function SPKPage() {
     setForm({
       no_spk: spk.no_spk,
       items: (spk.items || []).map(it => ({
-        ...it,
-        allocations: it.allocations?.length ? it.allocations : defaultAllocation(it.qty),
+        barang_id: it.barang_id,
+        nama_barang: it.nama_barang,
+        spesifikasi: it.spesifikasi || "",
+        qty: it.qty,
+        no_po: it.no_po || "",
+        // Backward-compat: fallback to legacy allocations[0]
+        pengrajin_id: it.pengrajin_id || it.allocations?.[0]?.pengrajin_id || "",
+        pengrajin_nama: it.pengrajin_nama || it.allocations?.[0]?.pengrajin_nama || it.nama_pengrajin || "",
+        harga: it.harga || 0,
+        gambar_path: it.gambar_path,
+        catatan: it.catatan || "",
       })),
       catatan_pembayaran: spk.catatan_pembayaran,
       owner_perusahaan: spk.owner_perusahaan,
@@ -168,21 +170,14 @@ export default function SPKPage() {
   };
 
   const downloadPDF = (spkId) => window.open(`${API}/export/spk/${spkId}/pdf`, '_blank');
-
-  const deleteSpk = async (id) => {
-    try {
-      await axios.delete(`${API}/spk/${id}`);
-      toast.success("SPK dihapus");
-      load();
-    } catch (e) { toast.error("Gagal hapus"); }
-  };
+  const deleteSpk = async (id) => { try { await axios.delete(`${API}/spk/${id}`); toast.success("SPK dihapus"); load(); } catch (e) { toast.error("Gagal hapus"); } };
 
   return (
     <div className="space-y-6" data-testid="spk-page">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-[#1A1A1A] tracking-tight" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>SPK</h1>
-          <p className="text-[#5C5C5C] mt-1">Surat Perintah Kerja — alokasi pengrajin per barang</p>
+          <p className="text-[#5C5C5C] mt-1">Surat Perintah Kerja — 1 baris = 1 pengrajin per barang. Boleh dibagi ke banyak SPK.</p>
         </div>
         {canEdit && (
           <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditingId(null); setForm(emptyForm); }}}>
@@ -192,7 +187,7 @@ export default function SPKPage() {
             <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{editingId ? "Edit SPK" : "Buat SPK Baru"}</DialogTitle>
-                <DialogDescription>Alokasikan qty barang ke pengrajin. Total alokasi harus sama dengan qty barang.</DialogDescription>
+                <DialogDescription>Tiap baris = 1 pengrajin ambil qty tertentu. Total lintas SPK per barang tidak boleh melebihi qty PO.</DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -215,22 +210,22 @@ export default function SPKPage() {
                           {poList.map((p, i) => <SelectItem key={i} value={p._id || `${i}`}>{p.no_po}</SelectItem>)}
                         </SelectContent>
                       </Select>
-                      <Button size="sm" variant="outline" onClick={addItem} data-testid="add-spk-item"><Plus className="w-3 h-3 mr-1" /> Manual</Button>
+                      <Button size="sm" variant="outline" onClick={addItem} data-testid="add-spk-item"><Plus className="w-3 h-3 mr-1" /> Baris</Button>
                     </div>
                   </div>
+                  {pengrajinList.length === 0 && (
+                    <div className="p-3 bg-[#FFF3CD] border border-[#FFC107] rounded-md text-sm text-[#8B5A2B] mb-2">
+                      ⚠️ Belum ada pengrajin. Buka menu <strong>Pengrajin</strong> dan tambahkan minimal 1 pengrajin.
+                    </div>
+                  )}
                   <div className="space-y-3">
-                    {pengrajinList.length === 0 && (
-                      <div className="p-3 bg-[#FFF3CD] border border-[#FFC107] rounded-md text-sm text-[#8B5A2B]">
-                        ⚠️ Belum ada pengrajin. Buka menu <strong>Pengrajin</strong> dan tambahkan minimal 1 pengrajin sebelum membuat SPK.
-                      </div>
-                    )}
                     {form.items.map((item, idx) => {
-                      const allocSum = (item.allocations || []).reduce((s, a) => s + (parseInt(a.qty) || 0), 0);
-                      const allocValid = allocSum === parseInt(item.qty);
+                      const sisa = getSisaAlokasi(item.no_po, item.barang_id, idx);
+                      const invalid = sisa !== null && (parseInt(item.qty) || 0) > sisa;
                       return (
-                        <div key={idx} className="p-3 border border-[#E5E5E5] rounded-md space-y-3">
+                        <div key={idx} className="p-3 border border-[#E5E5E5] rounded-md space-y-2">
                           <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-                            <div className="md:col-span-5">
+                            <div className="md:col-span-4">
                               <Label className="text-xs">Barang</Label>
                               <Select value={item.barang_id} onValueChange={(v) => selectBarang(idx, v)}>
                                 <SelectTrigger data-testid={`spk-barang-${idx}`}><SelectValue placeholder="Pilih barang" /></SelectTrigger>
@@ -239,15 +234,24 @@ export default function SPKPage() {
                                 </SelectContent>
                               </Select>
                             </div>
-                            <div className="md:col-span-2">
-                              <Label className="text-xs">Qty Total</Label>
-                              <Input type="number" data-testid={`spk-qty-${idx}`} value={item.qty} onChange={(e) => updateItem(idx, "qty", parseInt(e.target.value) || 1)} />
+                            <div className="md:col-span-3">
+                              <Label className="text-xs">Pengrajin</Label>
+                              <Select value={item.pengrajin_id} onValueChange={(v) => updateItem(idx, "pengrajin_id", v)}>
+                                <SelectTrigger data-testid={`spk-pengrajin-${idx}`}><SelectValue placeholder="Pilih pengrajin" /></SelectTrigger>
+                                <SelectContent>
+                                  {pengrajinList.map((p) => <SelectItem key={p._id} value={p._id}>{p.nama}</SelectItem>)}
+                                </SelectContent>
+                              </Select>
                             </div>
                             <div className="md:col-span-2">
                               <Label className="text-xs">No PO</Label>
-                              <Input value={item.no_po || ""} onChange={(e) => updateItem(idx, "no_po", e.target.value)} />
+                              <Input value={item.no_po || ""} onChange={(e) => updateItem(idx, "no_po", e.target.value)} data-testid={`spk-no-po-${idx}`} />
                             </div>
-                            <div className="md:col-span-2">
+                            <div className="md:col-span-1">
+                              <Label className="text-xs">Qty</Label>
+                              <Input type="number" min={1} data-testid={`spk-qty-${idx}`} value={item.qty} onChange={(e) => updateItem(idx, "qty", parseInt(e.target.value) || 1)} className={invalid ? "border-[#F44336]" : ""} />
+                            </div>
+                            <div className="md:col-span-1">
                               <Label className="text-xs">Harga</Label>
                               <Input type="number" value={item.harga} onChange={(e) => updateItem(idx, "harga", parseFloat(e.target.value) || 0)} data-testid={`spk-harga-${idx}`} />
                             </div>
@@ -255,39 +259,13 @@ export default function SPKPage() {
                               <Button variant="ghost" size="icon" onClick={() => removeItem(idx)} className="text-[#F44336]"><Trash2 className="w-4 h-4" /></Button>
                             </div>
                           </div>
-                          <div className="border-t border-[#F0E6D6] pt-3">
-                            <div className="flex items-center justify-between mb-2">
-                              <Label className="text-xs flex items-center gap-1"><Users className="w-3 h-3" /> Alokasi Pengrajin ({allocSum}/{item.qty})</Label>
-                              <Button type="button" variant="outline" size="sm" onClick={() => addAlloc(idx)} data-testid={`add-alloc-${idx}`}><Plus className="w-3 h-3 mr-1" /> Tambah Pengrajin</Button>
-                            </div>
-                            <div className="space-y-2">
-                              {(item.allocations || []).map((a, ai) => (
-                                <div key={ai} className="grid grid-cols-12 gap-2 items-end">
-                                  <div className="col-span-7">
-                                    <Select value={a.pengrajin_id} onValueChange={(v) => updateAlloc(idx, ai, "pengrajin_id", v)}>
-                                      <SelectTrigger data-testid={`alloc-pengrajin-${idx}-${ai}`}><SelectValue placeholder="Pilih pengrajin" /></SelectTrigger>
-                                      <SelectContent>
-                                        {pengrajinList.map((p) => <SelectItem key={p._id} value={p._id}>{p.nama}</SelectItem>)}
-                                      </SelectContent>
-                                    </Select>
-                                  </div>
-                                  <div className="col-span-4">
-                                    <Input type="number" min={1} value={a.qty} onChange={(e) => updateAlloc(idx, ai, "qty", parseInt(e.target.value) || 0)} placeholder="Qty" data-testid={`alloc-qty-${idx}-${ai}`} />
-                                  </div>
-                                  <div className="col-span-1">
-                                    {(item.allocations || []).length > 1 && (
-                                      <Button variant="ghost" size="icon" onClick={() => removeAlloc(idx, ai)} className="text-[#F44336]"><Trash2 className="w-3 h-3" /></Button>
-                                    )}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                            {!allocValid && <p className={`text-xs mt-1 ${allocValid ? 'text-[#4CAF50]' : 'text-[#F44336]'}`}>Total alokasi ({allocSum}) harus sama dengan qty ({item.qty})</p>}
-                          </div>
-                          <div>
-                            <Label className="text-xs">Catatan Item</Label>
-                            <Input placeholder="Note (opsional)" value={item.catatan || ""} onChange={(e) => updateItem(idx, "catatan", e.target.value)} data-testid={`spk-catatan-${idx}`} />
-                          </div>
+                          {sisa !== null && (
+                            <p className={`text-xs ${invalid ? 'text-[#F44336]' : 'text-[#5C5C5C]'}`} data-testid={`spk-sisa-${idx}`}>
+                              Sisa alokasi PO untuk barang ini: <strong>{sisa}</strong>
+                              {invalid && ` — qty melebihi sisa!`}
+                            </p>
+                          )}
+                          <Input placeholder="Catatan item (opsional)" value={item.catatan || ""} onChange={(e) => updateItem(idx, "catatan", e.target.value)} className="h-8 text-xs" />
                         </div>
                       );
                     })}
@@ -339,14 +317,8 @@ export default function SPKPage() {
                         <Button variant="outline" size="sm" className="text-[#F44336]" data-testid={`delete-spk-${idx}`}><Trash2 className="w-3 h-3" /></Button>
                       </AlertDialogTrigger>
                       <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Hapus SPK?</AlertDialogTitle>
-                          <AlertDialogDescription>SPK {spk.no_spk} akan dihapus permanen.</AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Batal</AlertDialogCancel>
-                          <AlertDialogAction className="bg-[#F44336]" onClick={() => deleteSpk(spk._id)}>Hapus</AlertDialogAction>
-                        </AlertDialogFooter>
+                        <AlertDialogHeader><AlertDialogTitle>Hapus SPK?</AlertDialogTitle><AlertDialogDescription>SPK {spk.no_spk} akan dihapus permanen.</AlertDialogDescription></AlertDialogHeader>
+                        <AlertDialogFooter><AlertDialogCancel>Batal</AlertDialogCancel><AlertDialogAction className="bg-[#F44336]" onClick={() => deleteSpk(spk._id)}>Hapus</AlertDialogAction></AlertDialogFooter>
                       </AlertDialogContent>
                     </AlertDialog>
                   )}
@@ -354,34 +326,26 @@ export default function SPKPage() {
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {spk.items?.map((item, ii) => (
-                  <div key={ii} className="flex gap-3 p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]">
-                    {item.gambar_path ? <img src={`${API}/files/${item.gambar_path}`} className="w-14 h-14 object-cover rounded" alt="" /> : <div className="w-14 h-14 bg-[#F0E6D6] rounded flex items-center justify-center"><Package className="w-5 h-5 text-[#8B5A2B]" /></div>}
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">{item.nama_barang}</p>
-                      <div className="flex gap-2 items-center mt-1 flex-wrap">
-                        <span className="text-xs px-1.5 py-0.5 bg-[#8B5A2B] text-white rounded">Qty: {item.qty}</span>
-                        {canSeePrice && item.harga > 0 && <span className="text-xs text-[#4CAF50]">Rp {item.harga?.toLocaleString('id-ID')}</span>}
-                      </div>
-                      {(item.allocations && item.allocations.length > 0) ? (
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {item.allocations.map((a, ai) => (
-                            <span key={ai} className="text-[10px] px-1.5 py-0.5 bg-[#F0E6D6] text-[#8B5A2B] rounded">{a.pengrajin_nama}: {a.qty}</span>
-                          ))}
+                {spk.items?.map((item, ii) => {
+                  const pnama = item.pengrajin_nama || item.allocations?.[0]?.pengrajin_nama || item.nama_pengrajin;
+                  return (
+                    <div key={ii} className="flex gap-3 p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]">
+                      {item.gambar_path ? <img src={`${API}/files/${item.gambar_path}`} className="w-14 h-14 object-cover rounded" alt="" /> : <div className="w-14 h-14 bg-[#F0E6D6] rounded flex items-center justify-center"><Package className="w-5 h-5 text-[#8B5A2B]" /></div>}
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm truncate">{item.nama_barang}</p>
+                        <div className="flex gap-2 items-center mt-1 flex-wrap">
+                          <span className="text-xs px-1.5 py-0.5 bg-[#8B5A2B] text-white rounded">Qty: {item.qty}</span>
+                          {canSeePrice && item.harga > 0 && <span className="text-xs text-[#4CAF50]">Rp {item.harga?.toLocaleString('id-ID')}</span>}
                         </div>
-                      ) : item.nama_pengrajin && (
-                        <p className="text-xs text-[#5C5C5C] truncate mt-1">{item.nama_pengrajin}</p>
-                      )}
-                      {item.catatan && <p className="text-xs text-[#5C5C5C] italic mt-1 truncate">📝 {item.catatan}</p>}
+                        {pnama && <p className="text-xs text-[#8B5A2B] font-medium mt-1 truncate">🔨 {pnama}</p>}
+                        {item.no_po && <p className="text-[10px] text-[#5C5C5C] truncate">PO: {item.no_po}</p>}
+                        {item.catatan && <p className="text-xs text-[#5C5C5C] italic mt-1 truncate">📝 {item.catatan}</p>}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
-              {spk.catatan_pembayaran && (
-                <div className="mt-4 pt-4 border-t border-[#E5E5E5]">
-                  <p className="text-sm text-[#5C5C5C]"><strong>Catatan Pembayaran:</strong> {spk.catatan_pembayaran}</p>
-                </div>
-              )}
+              {spk.catatan_pembayaran && <div className="mt-4 pt-4 border-t border-[#E5E5E5]"><p className="text-sm text-[#5C5C5C]"><strong>Catatan Pembayaran:</strong> {spk.catatan_pembayaran}</p></div>}
             </Card>
           ))
         )}
@@ -395,31 +359,23 @@ export default function SPKPage() {
                 <p><strong>Deadline:</strong> {detail.deadline}</p>
                 <p><strong>Owner:</strong> {detail.owner_perusahaan}</p>
               </div>
-              {detail.items?.map((item, i) => (
-                <div key={i} className="flex gap-4 p-3 border border-[#E5E5E5] rounded-md">
-                  {item.gambar_path && <img src={`${API}/files/${item.gambar_path}`} className="w-24 h-24 object-cover rounded" alt="" />}
-                  <div className="flex-1">
-                    <h4 className="font-bold text-[#1A1A1A]">{item.nama_barang}</h4>
-                    <p className="text-sm text-[#5C5C5C]">{item.spesifikasi}</p>
-                    <p className="text-sm mt-1">No PO: <strong>{item.no_po}</strong> | Qty: <strong>{item.qty}</strong></p>
-                    {(item.allocations && item.allocations.length > 0) ? (
-                      <div className="mt-2 text-sm">
-                        <p className="font-medium">Alokasi:</p>
-                        <ul className="ml-4 list-disc">
-                          {item.allocations.map((a, ai) => <li key={ai}>{a.pengrajin_nama}: <strong>{a.qty}</strong></li>)}
-                        </ul>
-                      </div>
-                    ) : item.nama_pengrajin && <p className="text-sm">Pengrajin: {item.nama_pengrajin}</p>}
-                    {canSeePrice && item.harga > 0 && <p className="text-sm text-[#4CAF50]">Rp {item.harga?.toLocaleString('id-ID')}</p>}
-                    {item.catatan && <p className="text-sm text-[#5C5C5C] italic mt-1">📝 {item.catatan}</p>}
+              {detail.items?.map((item, i) => {
+                const pnama = item.pengrajin_nama || item.allocations?.[0]?.pengrajin_nama || item.nama_pengrajin;
+                return (
+                  <div key={i} className="flex gap-4 p-3 border border-[#E5E5E5] rounded-md">
+                    {item.gambar_path && <img src={`${API}/files/${item.gambar_path}`} className="w-24 h-24 object-cover rounded" alt="" />}
+                    <div className="flex-1">
+                      <h4 className="font-bold text-[#1A1A1A]">{item.nama_barang}</h4>
+                      <p className="text-sm text-[#5C5C5C]">{item.spesifikasi}</p>
+                      <p className="text-sm mt-1">No PO: <strong>{item.no_po}</strong> | Qty: <strong>{item.qty}</strong></p>
+                      {pnama && <p className="text-sm">Pengrajin: <strong>{pnama}</strong></p>}
+                      {canSeePrice && item.harga > 0 && <p className="text-sm text-[#4CAF50]">Rp {item.harga?.toLocaleString('id-ID')}</p>}
+                      {item.catatan && <p className="text-sm text-[#5C5C5C] italic mt-1">📝 {item.catatan}</p>}
+                    </div>
                   </div>
-                </div>
-              ))}
-              {detail.catatan_pembayaran && (
-                <div className="p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]">
-                  <p className="text-sm"><strong>Catatan Pembayaran:</strong> {detail.catatan_pembayaran}</p>
-                </div>
-              )}
+                );
+              })}
+              {detail.catatan_pembayaran && <div className="p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]"><p className="text-sm"><strong>Catatan Pembayaran:</strong> {detail.catatan_pembayaran}</p></div>}
             </div>
           )}
         </DialogContent>
