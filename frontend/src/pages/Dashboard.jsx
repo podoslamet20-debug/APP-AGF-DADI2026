@@ -41,7 +41,7 @@ export default function Dashboard() {
     };
     load();
     loadPoReady();
-  }, [API]);
+  }, [API, loadPoReady]);
 
   const handleMarkShipped = async (poId, noPo) => {
     if (!window.confirm(`Tandai PO "${noPo}" sebagai sudah dikirim? PO akan hilang dari daftar notifikasi ini.`)) return;
