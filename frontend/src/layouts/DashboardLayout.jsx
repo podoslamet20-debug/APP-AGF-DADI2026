@@ -2,19 +2,22 @@ import { useState } from "react";
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Package, Home, ShoppingCart, PackageOpen, Truck, FileText, TrendingUp, BarChart3, LogOut, Menu, X, User, Users, History } from "lucide-react";
+import { Package, Home, ShoppingCart, PackageOpen, Truck, FileText, TrendingUp, BarChart3, LogOut, Menu, X, User, Users, History, Hammer } from "lucide-react";
+
+const ALL_ROLES = ["admin", "staff", "guest", "owner"];
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: Home, testId: "nav-dashboard" },
-  { path: "/barang", label: "Database Barang", icon: Package, testId: "nav-barang", roles: ["admin", "staff", "guest"] },
-  { path: "/po", label: "PO", icon: ShoppingCart, testId: "nav-po", roles: ["admin", "staff", "guest"] },
-  { path: "/barang-masuk", label: "Barang Masuk", icon: PackageOpen, testId: "nav-barang-masuk", roles: ["admin", "staff", "guest"] },
-  { path: "/staffing", label: "Staffing", icon: Truck, testId: "nav-staffing", roles: ["admin", "staff", "guest"] },
-  { path: "/spk", label: "SPK", icon: FileText, testId: "nav-spk", roles: ["admin", "staff", "guest"] },
-  { path: "/progres", label: "Progres Barang", icon: TrendingUp, testId: "nav-progres", roles: ["admin", "staff", "guest"] },
-  { path: "/rekap", label: "Rekap Data", icon: BarChart3, testId: "nav-rekap", roles: ["admin", "staff", "guest"] },
+  { path: "/barang", label: "Database Barang", icon: Package, testId: "nav-barang", roles: ALL_ROLES },
+  { path: "/pengrajin", label: "Pengrajin", icon: Hammer, testId: "nav-pengrajin", roles: ALL_ROLES },
+  { path: "/po", label: "PO", icon: ShoppingCart, testId: "nav-po", roles: ALL_ROLES },
+  { path: "/barang-masuk", label: "Barang Masuk", icon: PackageOpen, testId: "nav-barang-masuk", roles: ALL_ROLES },
+  { path: "/staffing", label: "Staffing", icon: Truck, testId: "nav-staffing", roles: ALL_ROLES },
+  { path: "/spk", label: "SPK", icon: FileText, testId: "nav-spk", roles: ALL_ROLES },
+  { path: "/progres", label: "Progres Barang", icon: TrendingUp, testId: "nav-progres", roles: ALL_ROLES },
+  { path: "/rekap", label: "Rekap Data", icon: BarChart3, testId: "nav-rekap", roles: ALL_ROLES },
   { path: "/users", label: "User Management", icon: Users, testId: "nav-users", roles: ["admin"] },
-  { path: "/activity-log", label: "Activity Log", icon: History, testId: "nav-activity-log", roles: ["admin"] },
+  { path: "/activity-log", label: "Activity Log", icon: History, testId: "nav-activity-log", roles: ["admin", "owner"] },
 ];
 
 export default function DashboardLayout() {
@@ -31,6 +34,7 @@ export default function DashboardLayout() {
     admin: "bg-[#8B5A2B] text-white",
     staff: "bg-[#4CAF50] text-white",
     guest: "bg-[#5C5C5C] text-white",
+    owner: "bg-[#1A237E] text-white",
   };
 
   const filteredNav = navItems.filter((item) => !item.roles || item.roles.includes(user?.role));

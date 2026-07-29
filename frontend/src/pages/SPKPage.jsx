@@ -10,40 +10,43 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, Search, Trash2, FileText, Download, Package, Edit } from "lucide-react";
+import { Plus, Search, Trash2, FileText, Download, Package, Edit, Users } from "lucide-react";
+
+const emptyForm = { no_spk: "", items: [], catatan_pembayaran: "", owner_perusahaan: "", deadline: "" };
 
 export default function SPKPage() {
-  const { API, canEdit, canSeePrice, canSeeCraftsman } = useAuth();
+  const { API, canEdit, canSeePrice } = useAuth();
   const [spks, setSpks] = useState([]);
   const [barangList, setBarangList] = useState([]);
   const [poList, setPoList] = useState([]);
+  const [pengrajinList, setPengrajinList] = useState([]);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [detail, setDetail] = useState(null);
-  const [form, setForm] = useState({
-    no_spk: "",
-    items: [],
-    catatan_pembayaran: "",
-    owner_perusahaan: "",
-    deadline: "",
-  });
+  const [form, setForm] = useState(emptyForm);
 
   const load = async () => {
     try {
-      const [spkRes, brRes, poRes] = await Promise.all([
+      const [spkRes, brRes, poRes, pgRes] = await Promise.all([
         axios.get(`${API}/spk${search ? `?search=${search}` : ""}`),
         axios.get(`${API}/barang`),
         axios.get(`${API}/po`),
+        axios.get(`${API}/pengrajin`),
       ]);
       setSpks(spkRes.data);
       setBarangList(brRes.data);
       setPoList(poRes.data);
+      setPengrajinList(pgRes.data);
     } catch (e) { console.error(e); }
   };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [search]);
+
+  const defaultAllocation = (qty) => pengrajinList.length > 0
+    ? [{ pengrajin_id: pengrajinList[0]._id, pengrajin_nama: pengrajinList[0].nama, qty: qty || 1 }]
+    : [{ pengrajin_id: "", pengrajin_nama: "", qty: qty || 1 }];
 
   const importFromPO = (poId) => {
     const po = poList.find(p => (p._id || p.id) === poId);
@@ -54,58 +57,95 @@ export default function SPKPage() {
       spesifikasi: i.spesifikasi,
       qty: i.qty,
       no_po: po.no_po,
-      nama_pengrajin: i.nama_pengrajin,
+      allocations: defaultAllocation(i.qty),
       harga: i.harga_pengrajin || 0,
       gambar_path: i.gambar_path,
+      catatan: "",
     }));
     setForm({ ...form, items: [...form.items, ...newItems] });
     toast.success(`${newItems.length} item ditambahkan dari PO ${po.no_po}`);
   };
 
   const addItem = () => {
-    setForm({ ...form, items: [...form.items, { barang_id: "", nama_barang: "", spesifikasi: "", qty: 1, no_po: "", nama_pengrajin: "", pengrajin_list: [], harga: 0, gambar_path: "", catatan: "" }] });
+    setForm({ ...form, items: [...form.items, { barang_id: "", nama_barang: "", spesifikasi: "", qty: 1, no_po: "", allocations: defaultAllocation(1), harga: 0, gambar_path: "", catatan: "" }] });
   };
 
-  const removeItem = (idx) => {
-    setForm({ ...form, items: form.items.filter((_, i) => i !== idx) });
-  };
+  const removeItem = (idx) => setForm({ ...form, items: form.items.filter((_, i) => i !== idx) });
 
   const selectBarang = (idx, barangId) => {
     const b = barangList.find(bl => (bl._id || bl.id) === barangId);
     if (!b) return;
     const items = [...form.items];
-    items[idx] = {
-      ...items[idx],
-      barang_id: barangId,
-      nama_barang: b.nama_barang,
-      spesifikasi: b.spesifikasi,
-      nama_pengrajin: b.nama_pengrajin,
-      pengrajin_list: b.pengrajin_list || [],
-      gambar_path: b.gambar_path,
-      harga: b.harga_pengrajin || 0,
-    };
+    items[idx] = { ...items[idx], barang_id: barangId, nama_barang: b.nama_barang, spesifikasi: b.spesifikasi, gambar_path: b.gambar_path, harga: b.harga_pengrajin || 0 };
     setForm({ ...form, items });
   };
 
   const updateItem = (idx, key, val) => {
     const items = [...form.items];
     items[idx][key] = val;
+    // If qty changes, auto-adjust first allocation to sum
+    if (key === "qty" && items[idx].allocations?.length === 1) {
+      items[idx].allocations = [{ ...items[idx].allocations[0], qty: val }];
+    }
+    setForm({ ...form, items });
+  };
+
+  const addAlloc = (idx) => {
+    const items = [...form.items];
+    const used = (items[idx].allocations || []).reduce((s, a) => s + (parseInt(a.qty) || 0), 0);
+    const remaining = Math.max(1, (items[idx].qty || 0) - used);
+    items[idx].allocations = [...(items[idx].allocations || []), { pengrajin_id: "", pengrajin_nama: "", qty: remaining }];
+    setForm({ ...form, items });
+  };
+
+  const removeAlloc = (itemIdx, allocIdx) => {
+    const items = [...form.items];
+    items[itemIdx].allocations = items[itemIdx].allocations.filter((_, i) => i !== allocIdx);
+    setForm({ ...form, items });
+  };
+
+  const updateAlloc = (itemIdx, allocIdx, key, val) => {
+    const items = [...form.items];
+    if (key === "pengrajin_id") {
+      const pg = pengrajinList.find(p => p._id === val);
+      items[itemIdx].allocations[allocIdx] = { ...items[itemIdx].allocations[allocIdx], pengrajin_id: val, pengrajin_nama: pg?.nama || "" };
+    } else {
+      items[itemIdx].allocations[allocIdx] = { ...items[itemIdx].allocations[allocIdx], [key]: val };
+    }
     setForm({ ...form, items });
   };
 
   const submit = async () => {
     if (form.items.length === 0) { toast.error("Tambahkan minimal 1 barang"); return; }
+    // Validate: each item allocations sum = item.qty
+    for (const it of form.items) {
+      const sum = (it.allocations || []).reduce((s, a) => s + (parseInt(a.qty) || 0), 0);
+      if (sum !== parseInt(it.qty)) {
+        toast.error(`Alokasi pengrajin untuk '${it.nama_barang}' (${sum}) harus sama dengan qty item (${it.qty})`);
+        return;
+      }
+      for (const a of (it.allocations || [])) {
+        if (!a.pengrajin_id) {
+          toast.error(`Pilih pengrajin untuk semua alokasi di '${it.nama_barang}'`);
+          return;
+        }
+      }
+    }
+    // Backward-compat: set nama_pengrajin = first allocation's name (for PDF)
+    const payload = { ...form, items: form.items.map(it => ({
+      ...it,
+      nama_pengrajin: it.allocations?.[0]?.pengrajin_nama || "",
+      allocations: it.allocations.map(a => ({ pengrajin_id: a.pengrajin_id, pengrajin_nama: a.pengrajin_nama, qty: parseInt(a.qty) })),
+    })) };
     try {
       if (editingId) {
-        await axios.put(`${API}/spk/${editingId}`, form);
+        await axios.put(`${API}/spk/${editingId}`, payload);
         toast.success("SPK berhasil diupdate");
       } else {
-        await axios.post(`${API}/spk`, form);
+        await axios.post(`${API}/spk`, payload);
         toast.success("SPK berhasil dibuat");
       }
-      setOpen(false);
-      setEditingId(null);
-      setForm({ no_spk: "", items: [], catatan_pembayaran: "", owner_perusahaan: "", deadline: "" });
+      setOpen(false); setEditingId(null); setForm(emptyForm);
       load();
     } catch (e) {
       toast.error("Gagal: " + (e.response?.data?.detail || ""));
@@ -115,7 +155,10 @@ export default function SPKPage() {
   const startEdit = (spk) => {
     setForm({
       no_spk: spk.no_spk,
-      items: spk.items,
+      items: (spk.items || []).map(it => ({
+        ...it,
+        allocations: it.allocations?.length ? it.allocations : defaultAllocation(it.qty),
+      })),
       catatan_pembayaran: spk.catatan_pembayaran,
       owner_perusahaan: spk.owner_perusahaan,
       deadline: spk.deadline,
@@ -124,9 +167,7 @@ export default function SPKPage() {
     setOpen(true);
   };
 
-  const downloadPDF = (spkId) => {
-    window.open(`${API}/export/spk/${spkId}/pdf`, '_blank');
-  };
+  const downloadPDF = (spkId) => window.open(`${API}/export/spk/${spkId}/pdf`, '_blank');
 
   const deleteSpk = async (id) => {
     try {
@@ -141,15 +182,18 @@ export default function SPKPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-[#1A1A1A] tracking-tight" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>SPK</h1>
-          <p className="text-[#5C5C5C] mt-1">Surat Perintah Kerja untuk pengrajin</p>
+          <p className="text-[#5C5C5C] mt-1">Surat Perintah Kerja — alokasi pengrajin per barang</p>
         </div>
         {canEdit && (
-          <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditingId(null); setForm({ no_spk: "", items: [], catatan_pembayaran: "", owner_perusahaan: "", deadline: "" }); }}}>
+          <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditingId(null); setForm(emptyForm); }}}>
             <DialogTrigger asChild>
               <Button className="bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="add-spk-button"><Plus className="w-4 h-4 mr-2" /> Buat SPK</Button>
             </DialogTrigger>
-            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader><DialogTitle>{editingId ? "Edit SPK" : "Buat SPK Baru"}</DialogTitle></DialogHeader>
+            <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{editingId ? "Edit SPK" : "Buat SPK Baru"}</DialogTitle>
+                <DialogDescription>Alokasikan qty barang ke pengrajin. Total alokasi harus sama dengan qty barang.</DialogDescription>
+              </DialogHeader>
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
@@ -174,61 +218,79 @@ export default function SPKPage() {
                       <Button size="sm" variant="outline" onClick={addItem} data-testid="add-spk-item"><Plus className="w-3 h-3 mr-1" /> Manual</Button>
                     </div>
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-3">
+                    {pengrajinList.length === 0 && (
+                      <div className="p-3 bg-[#FFF3CD] border border-[#FFC107] rounded-md text-sm text-[#8B5A2B]">
+                        ⚠️ Belum ada pengrajin. Buka menu <strong>Pengrajin</strong> dan tambahkan minimal 1 pengrajin sebelum membuat SPK.
+                      </div>
+                    )}
                     {form.items.map((item, idx) => {
-                      const pengrajinOptions = [item.nama_pengrajin, ...(item.pengrajin_list || [])].filter(Boolean);
-                      // Dedupe while preserving order
-                      const seen = new Set();
-                      const uniqueOptions = pengrajinOptions.filter(p => { if (seen.has(p)) return false; seen.add(p); return true; });
+                      const allocSum = (item.allocations || []).reduce((s, a) => s + (parseInt(a.qty) || 0), 0);
+                      const allocValid = allocSum === parseInt(item.qty);
                       return (
-                      <div key={idx} className="p-3 border border-[#E5E5E5] rounded-md space-y-2">
-                        <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-                          <div className="md:col-span-6">
-                            <Label className="text-xs">Barang</Label>
-                            <Select value={item.barang_id} onValueChange={(v) => selectBarang(idx, v)}>
-                              <SelectTrigger data-testid={`spk-barang-${idx}`}><SelectValue placeholder="Pilih barang" /></SelectTrigger>
-                              <SelectContent>
-                                {barangList.map((b, bi) => <SelectItem key={bi} value={b._id || b.id || `${bi}`}>{b.nama_barang}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="md:col-span-2">
-                            <Label className="text-xs">Qty</Label>
-                            <Input type="number" data-testid={`spk-qty-${idx}`} value={item.qty} onChange={(e) => updateItem(idx, "qty", parseInt(e.target.value) || 1)} />
-                          </div>
-                          <div className="md:col-span-3">
-                            <Label className="text-xs">No PO</Label>
-                            <Input value={item.no_po || ""} onChange={(e) => updateItem(idx, "no_po", e.target.value)} />
-                          </div>
-                          <div className="md:col-span-1">
-                            <Button variant="ghost" size="icon" onClick={() => removeItem(idx)} className="text-[#F44336]"><Trash2 className="w-4 h-4" /></Button>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
-                          <div className="md:col-span-5">
-                            <Label className="text-xs">Pengrajin</Label>
-                            {uniqueOptions.length > 1 ? (
-                              <Select value={item.nama_pengrajin || ""} onValueChange={(v) => updateItem(idx, "nama_pengrajin", v)}>
-                                <SelectTrigger data-testid={`spk-pengrajin-select-${idx}`}><SelectValue placeholder="Pilih pengrajin" /></SelectTrigger>
+                        <div key={idx} className="p-3 border border-[#E5E5E5] rounded-md space-y-3">
+                          <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+                            <div className="md:col-span-5">
+                              <Label className="text-xs">Barang</Label>
+                              <Select value={item.barang_id} onValueChange={(v) => selectBarang(idx, v)}>
+                                <SelectTrigger data-testid={`spk-barang-${idx}`}><SelectValue placeholder="Pilih barang" /></SelectTrigger>
                                 <SelectContent>
-                                  {uniqueOptions.map((p, pi) => <SelectItem key={pi} value={p}>{p}</SelectItem>)}
+                                  {barangList.map((b, bi) => <SelectItem key={bi} value={b._id || `${bi}`}>{b.nama_barang}</SelectItem>)}
                                 </SelectContent>
                               </Select>
-                            ) : (
-                              <Input value={item.nama_pengrajin || ""} onChange={(e) => updateItem(idx, "nama_pengrajin", e.target.value)} placeholder="Nama pengrajin" data-testid={`spk-pengrajin-input-${idx}`} />
-                            )}
+                            </div>
+                            <div className="md:col-span-2">
+                              <Label className="text-xs">Qty Total</Label>
+                              <Input type="number" data-testid={`spk-qty-${idx}`} value={item.qty} onChange={(e) => updateItem(idx, "qty", parseInt(e.target.value) || 1)} />
+                            </div>
+                            <div className="md:col-span-2">
+                              <Label className="text-xs">No PO</Label>
+                              <Input value={item.no_po || ""} onChange={(e) => updateItem(idx, "no_po", e.target.value)} />
+                            </div>
+                            <div className="md:col-span-2">
+                              <Label className="text-xs">Harga</Label>
+                              <Input type="number" value={item.harga} onChange={(e) => updateItem(idx, "harga", parseFloat(e.target.value) || 0)} data-testid={`spk-harga-${idx}`} />
+                            </div>
+                            <div className="md:col-span-1 flex items-end">
+                              <Button variant="ghost" size="icon" onClick={() => removeItem(idx)} className="text-[#F44336]"><Trash2 className="w-4 h-4" /></Button>
+                            </div>
                           </div>
-                          <div className="md:col-span-4">
-                            <Label className="text-xs">Harga</Label>
-                            <Input type="number" placeholder="Harga" value={item.harga} onChange={(e) => updateItem(idx, "harga", parseFloat(e.target.value) || 0)} data-testid={`spk-harga-${idx}`} />
+                          <div className="border-t border-[#F0E6D6] pt-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <Label className="text-xs flex items-center gap-1"><Users className="w-3 h-3" /> Alokasi Pengrajin ({allocSum}/{item.qty})</Label>
+                              <Button type="button" variant="outline" size="sm" onClick={() => addAlloc(idx)} data-testid={`add-alloc-${idx}`}><Plus className="w-3 h-3 mr-1" /> Tambah Pengrajin</Button>
+                            </div>
+                            <div className="space-y-2">
+                              {(item.allocations || []).map((a, ai) => (
+                                <div key={ai} className="grid grid-cols-12 gap-2 items-end">
+                                  <div className="col-span-7">
+                                    <Select value={a.pengrajin_id} onValueChange={(v) => updateAlloc(idx, ai, "pengrajin_id", v)}>
+                                      <SelectTrigger data-testid={`alloc-pengrajin-${idx}-${ai}`}><SelectValue placeholder="Pilih pengrajin" /></SelectTrigger>
+                                      <SelectContent>
+                                        {pengrajinList.map((p) => <SelectItem key={p._id} value={p._id}>{p.nama}</SelectItem>)}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                  <div className="col-span-4">
+                                    <Input type="number" min={1} value={a.qty} onChange={(e) => updateAlloc(idx, ai, "qty", parseInt(e.target.value) || 0)} placeholder="Qty" data-testid={`alloc-qty-${idx}-${ai}`} />
+                                  </div>
+                                  <div className="col-span-1">
+                                    {(item.allocations || []).length > 1 && (
+                                      <Button variant="ghost" size="icon" onClick={() => removeAlloc(idx, ai)} className="text-[#F44336]"><Trash2 className="w-3 h-3" /></Button>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            {!allocValid && <p className={`text-xs mt-1 ${allocValid ? 'text-[#4CAF50]' : 'text-[#F44336]'}`}>Total alokasi ({allocSum}) harus sama dengan qty ({item.qty})</p>}
                           </div>
-                          <div className="md:col-span-3">
+                          <div>
                             <Label className="text-xs">Catatan Item</Label>
                             <Input placeholder="Note (opsional)" value={item.catatan || ""} onChange={(e) => updateItem(idx, "catatan", e.target.value)} data-testid={`spk-catatan-${idx}`} />
                           </div>
                         </div>
-                      </div>
-                    )})}
+                      );
+                    })}
                   </div>
                 </div>
                 <div>
@@ -268,8 +330,8 @@ export default function SPKPage() {
                   <p className="text-sm text-[#5C5C5C]">Deadline: {spk.deadline}</p>
                   <p className="text-sm text-[#5C5C5C]">Owner: {spk.owner_perusahaan}</p>
                 </div>
-                <div className="flex gap-2">
-                  {canEdit && <Button variant="outline" size="sm" onClick={() => setDetail(spk)} data-testid={`view-spk-${idx}`}>Detail</Button>}
+                <div className="flex gap-2 flex-wrap">
+                  <Button variant="outline" size="sm" onClick={() => setDetail(spk)} data-testid={`view-spk-${idx}`}>Detail</Button>
                   {canEdit && <Button variant="outline" size="sm" onClick={() => startEdit(spk)} data-testid={`edit-spk-${idx}`}><Edit className="w-3 h-3 mr-1" /> Edit</Button>}
                   {canEdit && (
                     <AlertDialog>
@@ -291,17 +353,25 @@ export default function SPKPage() {
                   <Button variant="outline" size="sm" onClick={() => downloadPDF(spk._id)} data-testid={`pdf-spk-${idx}`}><Download className="w-3 h-3 mr-1" /> PDF</Button>
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {spk.items?.map((item, ii) => (
                   <div key={ii} className="flex gap-3 p-3 bg-[#FAFAFA] rounded-md border border-[#E5E5E5]">
                     {item.gambar_path ? <img src={`${API}/files/${item.gambar_path}`} className="w-14 h-14 object-cover rounded" alt="" /> : <div className="w-14 h-14 bg-[#F0E6D6] rounded flex items-center justify-center"><Package className="w-5 h-5 text-[#8B5A2B]" /></div>}
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm truncate">{item.nama_barang}</p>
-                      {canSeeCraftsman && <p className="text-xs text-[#5C5C5C] truncate">{item.nama_pengrajin}</p>}
                       <div className="flex gap-2 items-center mt-1 flex-wrap">
                         <span className="text-xs px-1.5 py-0.5 bg-[#8B5A2B] text-white rounded">Qty: {item.qty}</span>
                         {canSeePrice && item.harga > 0 && <span className="text-xs text-[#4CAF50]">Rp {item.harga?.toLocaleString('id-ID')}</span>}
                       </div>
+                      {(item.allocations && item.allocations.length > 0) ? (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {item.allocations.map((a, ai) => (
+                            <span key={ai} className="text-[10px] px-1.5 py-0.5 bg-[#F0E6D6] text-[#8B5A2B] rounded">{a.pengrajin_nama}: {a.qty}</span>
+                          ))}
+                        </div>
+                      ) : item.nama_pengrajin && (
+                        <p className="text-xs text-[#5C5C5C] truncate mt-1">{item.nama_pengrajin}</p>
+                      )}
                       {item.catatan && <p className="text-xs text-[#5C5C5C] italic mt-1 truncate">📝 {item.catatan}</p>}
                     </div>
                   </div>
@@ -330,9 +400,16 @@ export default function SPKPage() {
                   {item.gambar_path && <img src={`${API}/files/${item.gambar_path}`} className="w-24 h-24 object-cover rounded" alt="" />}
                   <div className="flex-1">
                     <h4 className="font-bold text-[#1A1A1A]">{item.nama_barang}</h4>
-                    {canSeeCraftsman && <p className="text-sm">Pengrajin: {item.nama_pengrajin}</p>}
                     <p className="text-sm text-[#5C5C5C]">{item.spesifikasi}</p>
                     <p className="text-sm mt-1">No PO: <strong>{item.no_po}</strong> | Qty: <strong>{item.qty}</strong></p>
+                    {(item.allocations && item.allocations.length > 0) ? (
+                      <div className="mt-2 text-sm">
+                        <p className="font-medium">Alokasi:</p>
+                        <ul className="ml-4 list-disc">
+                          {item.allocations.map((a, ai) => <li key={ai}>{a.pengrajin_nama}: <strong>{a.qty}</strong></li>)}
+                        </ul>
+                      </div>
+                    ) : item.nama_pengrajin && <p className="text-sm">Pengrajin: {item.nama_pengrajin}</p>}
                     {canSeePrice && item.harga > 0 && <p className="text-sm text-[#4CAF50]">Rp {item.harga?.toLocaleString('id-ID')}</p>}
                     {item.catatan && <p className="text-sm text-[#5C5C5C] italic mt-1">📝 {item.catatan}</p>}
                   </div>

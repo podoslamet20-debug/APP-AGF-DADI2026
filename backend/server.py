@@ -227,13 +227,20 @@ class LoginRequest(BaseModel):
 
 class BarangCreate(BaseModel):
     nama_barang: str
-    nama_pengrajin: str
+    nama_pengrajin: Optional[str] = ""  # DEPRECATED — kept for legacy display only
     spesifikasi: str
     harga_pengrajin: float
     harga_jual: float
     catatan: Optional[str] = ""
     gambar_path: Optional[str] = None
-    pengrajin_list: Optional[List[str]] = []  # additional/alternative pengrajin names
+    pengrajin_list: Optional[List[str]] = []  # DEPRECATED — legacy field
+
+class PengrajinCreate(BaseModel):
+    nama: str
+    telepon: Optional[str] = ""
+    alamat: Optional[str] = ""
+    rekening: Optional[str] = ""
+    catatan: Optional[str] = ""
 
 class POItemCreate(BaseModel):
     barang_id: str
@@ -284,14 +291,20 @@ class StaffingCreate(BaseModel):
     tanggal_keluar: str
     items: List[StaffingItem]
 
+class SPKAllocation(BaseModel):
+    pengrajin_id: str
+    pengrajin_nama: Optional[str] = ""
+    qty: int = Field(ge=1)
+
 class SPKItem(BaseModel):
     barang_id: Optional[str] = None
     nama_barang: str
     spesifikasi: Optional[str] = ""
     qty: int = Field(ge=1)
     no_po: Optional[str] = ""
-    nama_pengrajin: Optional[str] = ""
-    pengrajin_list: Optional[List[str]] = Field(default_factory=list)
+    nama_pengrajin: Optional[str] = ""  # DEPRECATED (kept for legacy PDF)
+    pengrajin_list: Optional[List[str]] = Field(default_factory=list)  # DEPRECATED
+    allocations: List[SPKAllocation] = Field(default_factory=list)  # NEW: multi-pengrajin split
     harga: Optional[float] = 0
     gambar_path: Optional[str] = None
     catatan: Optional[str] = ""
@@ -364,6 +377,17 @@ async def startup_event():
                 "created_at": datetime.now(timezone.utc)
             })
         
+        # Seed owner user
+        owner_email = "owner@agfdata.com"
+        if not await db.users.find_one({"email": owner_email}):
+            await db.users.insert_one({
+                "email": owner_email,
+                "password_hash": hash_password("owner123"),
+                "name": "Owner",
+                "role": "owner",
+                "created_at": datetime.now(timezone.utc)
+            })
+        
         guest_email = "tamu@agfdata.com"
         if not await db.users.find_one({"email": guest_email}):
             await db.users.insert_one({
@@ -381,6 +405,7 @@ async def startup_event():
             f.write(f"## Admin\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n\n")
             f.write(f"## Staff\n- Email: staff@agfdata.com\n- Password: staff123\n- Role: staff\n\n")
             f.write(f"## Guest\n- Email: tamu@agfdata.com\n- Password: tamu123\n- Role: guest\n\n")
+            f.write(f"## Owner\n- Email: owner@agfdata.com\n- Password: owner123\n- Role: owner (view-all incl. prices & activity log, no edit)\n\n")
             f.write("## Endpoints\n- POST /api/auth/login\n- GET /api/auth/me\n- POST /api/auth/logout\n")
         
         # Migration: convert legacy cumulative progres docs to stage entries.
@@ -825,23 +850,30 @@ async def create_barang_masuk(bm: BarangMasukCreate, user: dict = Depends(get_cu
     if not po:
         raise HTTPException(status_code=404, detail="PO not found")
     
-    # Validate: qty_diterima cannot exceed remaining (qty_po - qty_diterima_current)
+    # Validate: qty_diterima ≤ (SPK-alloc - already received for this pengrajin) if pengrajin_id present;
+    # else fallback to PO-level (qty_po - qty_diterima).
     po_items_map = {it.get("barang_id"): it for it in po.get("items", [])}
     items_dicts = []
     for it in bm.items:
         po_item = po_items_map.get(it.barang_id)
         if not po_item:
             raise HTTPException(status_code=400, detail=f"Barang {it.barang_id} tidak ada di PO ini")
-        sisa = (po_item.get("qty", 0) or 0) - (po_item.get("qty_diterima", 0) or 0)
-        if it.qty_diterima > sisa:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Qty diterima untuk {po_item.get('nama_barang','')} melebihi sisa PO (sisa: {sisa}, diminta: {it.qty_diterima})"
-            )
+        if it.pengrajin_id:
+            alloc = await _get_spk_allocation(bm.po_id, it.barang_id, it.pengrajin_id)
+            if alloc <= 0:
+                raise HTTPException(status_code=400, detail=f"Belum ada alokasi SPK untuk pengrajin ini pada '{po_item.get('nama_barang','')}'. Buat SPK dulu.")
+            already = await _get_bm_qty_per_pengrajin(bm.po_id, it.barang_id, it.pengrajin_id)
+            sisa = alloc - already
+            if it.qty_diterima > sisa:
+                raise HTTPException(status_code=400, detail=f"Qty diterima ({it.qty_diterima}) untuk '{po_item.get('nama_barang','')}' pengrajin '{it.pengrajin_nama or ''}' melebihi sisa alokasi (alokasi: {alloc}, sudah diterima: {already}, sisa: {max(sisa,0)})")
+        else:
+            sisa = (po_item.get("qty", 0) or 0) - (po_item.get("qty_diterima", 0) or 0)
+            if it.qty_diterima > sisa:
+                raise HTTPException(status_code=400, detail=f"Qty diterima untuk {po_item.get('nama_barang','')} melebihi sisa PO (sisa: {sisa}, diminta: {it.qty_diterima})")
         items_dicts.append({
             **it.model_dump(exclude_none=True),
             "nama_barang": po_item.get("nama_barang", ""),
-            "nama_pengrajin": po_item.get("nama_pengrajin", ""),
+            "nama_pengrajin": it.pengrajin_nama or po_item.get("nama_pengrajin", ""),
             "spesifikasi": po_item.get("spesifikasi", ""),
             "gambar_path": po_item.get("gambar_path"),
         })
@@ -968,10 +1000,30 @@ async def get_staffing(tanggal: Optional[str] = None, user: dict = Depends(get_c
     return items
 
 # ===== SPK Routes =====
+async def _validate_spk_allocations(items):
+    """Validate: each item's allocations sum equals item.qty, pengrajin_ids valid."""
+    for it in items:
+        allocs = it.allocations or []
+        if not allocs:
+            raise HTTPException(status_code=400, detail=f"Item '{it.nama_barang}' wajib punya minimal 1 alokasi pengrajin")
+        total = sum(int(a.qty or 0) for a in allocs)
+        if total != it.qty:
+            raise HTTPException(status_code=400, detail=f"Total alokasi pengrajin ({total}) untuk '{it.nama_barang}' harus sama dengan qty item ({it.qty})")
+        # Validate pengrajin_ids exist
+        for a in allocs:
+            try:
+                p = await db.pengrajin.find_one({"_id": ObjectId(a.pengrajin_id)})
+            except Exception:
+                p = None
+            if not p:
+                raise HTTPException(status_code=400, detail=f"Pengrajin ID '{a.pengrajin_id}' tidak ditemukan untuk item '{it.nama_barang}'")
+
+
 @api_router.post("/spk")
 async def create_spk(spk: SPKCreate, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin"]:
         raise HTTPException(status_code=403, detail="Not authorized")
+    await _validate_spk_allocations(spk.items)
     
     doc = spk.model_dump()
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -1008,6 +1060,7 @@ async def get_spk(search: Optional[str] = None, user: dict = Depends(get_current
 async def update_spk(spk_id: str, spk: SPKCreate, user: dict = Depends(get_current_user)):
     if user["role"] not in ["admin"]:
         raise HTTPException(status_code=403, detail="Not authorized")
+    await _validate_spk_allocations(spk.items)
     
     await db.spk.update_one(
         {"_id": ObjectId(spk_id)},
@@ -1112,19 +1165,24 @@ async def update_progres_entry(entry_id: str, entry: ProgresEntry, user: dict = 
     
     po_id = entry.po_id or ""
     is_manual = not po_id
+    pengrajin_id = entry.pengrajin_id or ""
     
-    # Compute stage sums MINUS own old contribution (so edit doesn't double-count)
-    if is_manual:
+    if not is_manual and pengrajin_id:
+        qty_masuk = await _get_bm_qty_per_pengrajin(po_id, entry.item_id, pengrajin_id)
+        sums = {s: await _get_progres_stage_per_pengrajin(po_id, entry.item_id, pengrajin_id, s, exclude_entry_id=entry_id) for s in VALID_STAGES}
+        # sums already exclude self, so skip the manual subtract below
+        old_stage = None  # signal: don't subtract again
+    elif is_manual:
         sums = await _get_stage_sums("", entry.item_id) if entry.item_id else {s: 0 for s in VALID_STAGES}
         qty_masuk = 0
+        old_stage = old.get("stage")
     else:
         sums = await _get_stage_sums(po_id, entry.item_id)
         qty_masuk = await _get_qty_masuk(po_id, entry.item_id)
+        old_stage = old.get("stage")
     
-    # Subtract own old qty from its old stage
-    old_stage = old.get("stage")
     old_qty = int(old.get("qty", 0) or 0)
-    if old_stage in sums:
+    if old_stage and old_stage in sums:
         sums[old_stage] = max(0, sums[old_stage] - old_qty)
     
     # Now validate new entry against updated sums
@@ -1150,10 +1208,11 @@ async def update_progres_entry(entry_id: str, entry: ProgresEntry, user: dict = 
         "stage": entry.stage,
         "qty": entry.qty,
         "tanggal": entry.tanggal or old.get("tanggal") or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "pengrajin_id": pengrajin_id,
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "updated_by": user["_id"],
     }
-    for meta_key in ("nama_barang", "nama_pengrajin", "spesifikasi", "gambar_path"):
+    for meta_key in ("nama_barang", "nama_pengrajin", "pengrajin_nama", "spesifikasi", "gambar_path"):
         val = getattr(entry, meta_key, None)
         if val:
             update_doc[meta_key] = val
@@ -1721,11 +1780,14 @@ async def update_bm(bm_id: str, bm: BarangMasukCreate, user: dict = Depends(get_
     if not po:
         raise HTTPException(status_code=404, detail="PO not found")
     
-    # Validate first (using "current qty_diterima minus own old contribution") before mutating PO
+    # Validate first (exclude own contribution) before mutating PO.
+    own_old_by_bp = {}  # (barang_id, pengrajin_id) → qty
     own_old = {}
     if old and old.get("po_id") == bm.po_id:
         for item in old.get("items", []):
             own_old[item.get("barang_id")] = own_old.get(item.get("barang_id"), 0) + (item.get("qty_diterima", 0) or 0)
+            key = (item.get("barang_id"), item.get("pengrajin_id") or "")
+            own_old_by_bp[key] = own_old_by_bp.get(key, 0) + (item.get("qty_diterima", 0) or 0)
     
     po_items_map = {it.get("barang_id"): it for it in po.get("items", [])}
     items_dicts = []
@@ -1733,17 +1795,23 @@ async def update_bm(bm_id: str, bm: BarangMasukCreate, user: dict = Depends(get_
         po_item = po_items_map.get(it.barang_id)
         if not po_item:
             raise HTTPException(status_code=400, detail=f"Barang {it.barang_id} tidak ada di PO ini")
-        current_others = (po_item.get("qty_diterima", 0) or 0) - own_old.get(it.barang_id, 0)
-        sisa = (po_item.get("qty", 0) or 0) - current_others
-        if it.qty_diterima > sisa:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Qty diterima untuk {po_item.get('nama_barang','')} melebihi sisa PO (sisa: {sisa}, diminta: {it.qty_diterima})"
-            )
+        if it.pengrajin_id:
+            alloc = await _get_spk_allocation(bm.po_id, it.barang_id, it.pengrajin_id)
+            if alloc <= 0:
+                raise HTTPException(status_code=400, detail=f"Belum ada alokasi SPK untuk pengrajin ini pada '{po_item.get('nama_barang','')}'. Buat SPK dulu.")
+            already_all = await _get_bm_qty_per_pengrajin(bm.po_id, it.barang_id, it.pengrajin_id, exclude_bm_id=bm_id)
+            sisa = alloc - already_all
+            if it.qty_diterima > sisa:
+                raise HTTPException(status_code=400, detail=f"Qty diterima ({it.qty_diterima}) untuk '{po_item.get('nama_barang','')}' pengrajin melebihi sisa alokasi (alokasi: {alloc}, sudah diterima: {already_all}, sisa: {max(sisa,0)})")
+        else:
+            current_others = (po_item.get("qty_diterima", 0) or 0) - own_old.get(it.barang_id, 0)
+            sisa = (po_item.get("qty", 0) or 0) - current_others
+            if it.qty_diterima > sisa:
+                raise HTTPException(status_code=400, detail=f"Qty diterima untuk {po_item.get('nama_barang','')} melebihi sisa PO (sisa: {sisa}, diminta: {it.qty_diterima})")
         items_dicts.append({
             **it.model_dump(exclude_none=True),
             "nama_barang": po_item.get("nama_barang", ""),
-            "nama_pengrajin": po_item.get("nama_pengrajin", ""),
+            "nama_pengrajin": it.pengrajin_nama or po_item.get("nama_pengrajin", ""),
             "spesifikasi": po_item.get("spesifikasi", ""),
             "gambar_path": po_item.get("gambar_path"),
         })
@@ -1894,7 +1962,7 @@ async def list_users(user: dict = Depends(get_current_user)):
 async def create_user(new_user: UserCreate, user: dict = Depends(get_current_user)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
-    if new_user.role not in ["admin", "staff", "guest"]:
+    if new_user.role not in ["admin", "staff", "guest", "owner"]:
         raise HTTPException(status_code=400, detail="Invalid role")
     existing = await db.users.find_one({"email": new_user.email.lower()})
     if existing:
@@ -1918,7 +1986,7 @@ async def update_user(user_id: str, upd: UserUpdate, user: dict = Depends(get_cu
     if upd.email: updates["email"] = upd.email.lower()
     if upd.name: updates["name"] = upd.name
     if upd.role:
-        if upd.role not in ["admin", "staff", "guest"]:
+        if upd.role not in ["admin", "staff", "guest", "owner"]:
             raise HTTPException(status_code=400, detail="Invalid role")
         updates["role"] = upd.role
     if upd.password:
@@ -1938,6 +2006,86 @@ async def delete_user(user_id: str, user: dict = Depends(get_current_user)):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
     return {"message": "User deleted"}
+
+
+# ===== Pengrajin CRUD =====
+@api_router.get("/pengrajin")
+async def list_pengrajin(user: dict = Depends(get_current_user)):
+    docs = await db.pengrajin.find({}).sort([("nama", 1)]).to_list(1000)
+    for d in docs:
+        d["_id"] = str(d["_id"])
+    return docs
+
+
+@api_router.post("/pengrajin")
+async def create_pengrajin(p: PengrajinCreate, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not p.nama.strip():
+        raise HTTPException(status_code=400, detail="Nama pengrajin wajib diisi")
+    doc = p.model_dump()
+    doc["created_at"] = datetime.now(timezone.utc).isoformat()
+    doc["created_by"] = user["_id"]
+    r = await db.pengrajin.insert_one(doc)
+    doc["_id"] = str(r.inserted_id)
+    return doc
+
+
+@api_router.put("/pengrajin/{pid}")
+async def update_pengrajin(pid: str, p: PengrajinCreate, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.pengrajin.update_one({"_id": ObjectId(pid)}, {"$set": p.model_dump()})
+    return {"message": "Pengrajin updated"}
+
+
+@api_router.delete("/pengrajin/{pid}")
+async def delete_pengrajin(pid: str, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    r = await db.pengrajin.delete_one({"_id": ObjectId(pid)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Pengrajin not found")
+    return {"message": "Pengrajin deleted"}
+
+
+# Helper: get SPK allocation qty for (po_id, barang_id, pengrajin_id)
+async def _get_spk_allocation(po_id: str, barang_id: str, pengrajin_id: str) -> int:
+    """Total qty allocated to this pengrajin for this barang in SPK(s) tied to this PO."""
+    po = await db.po.find_one({"_id": ObjectId(po_id)}) if po_id else None
+    if not po:
+        return 0
+    no_po = po.get("no_po", "")
+    total = 0
+    async for spk in db.spk.find({"items.no_po": no_po}):
+        for it in spk.get("items", []):
+            if it.get("no_po") == no_po and it.get("barang_id") == barang_id:
+                for a in it.get("allocations", []) or []:
+                    if a.get("pengrajin_id") == pengrajin_id:
+                        total += int(a.get("qty", 0) or 0)
+    return total
+
+
+async def _get_bm_qty_per_pengrajin(po_id: str, barang_id: str, pengrajin_id: str, exclude_bm_id: Optional[str] = None) -> int:
+    """Sum qty_diterima for (po, barang, pengrajin_id) across all BM (optionally excluding one)."""
+    total = 0
+    async for bm in db.barang_masuk.find({"po_id": po_id}):
+        if exclude_bm_id and str(bm.get("_id")) == exclude_bm_id:
+            continue
+        for it in bm.get("items", []):
+            if it.get("barang_id") == barang_id and (it.get("pengrajin_id") or "") == pengrajin_id:
+                total += int(it.get("qty_diterima", 0) or 0)
+    return total
+
+
+async def _get_progres_stage_per_pengrajin(po_id: str, barang_id: str, pengrajin_id: str, stage: str, exclude_entry_id: Optional[str] = None) -> int:
+    match: Dict[str, Any] = {"po_id": po_id, "item_id": barang_id, "stage": stage, "pengrajin_id": pengrajin_id}
+    if exclude_entry_id:
+        match["_id"] = {"$ne": ObjectId(exclude_entry_id)}
+    total = 0
+    async for e in db.progres.find(match):
+        total += int(e.get("qty", 0) or 0)
+    return total
 
 
 # ===== Additional Rekap Endpoints =====
@@ -2247,7 +2395,7 @@ async def get_activity_log(
     limit: int = 500,
     user: dict = Depends(get_current_user),
 ):
-    if user["role"] != "admin":
+    if user["role"] != "admin" and user["role"] != "owner":
         raise HTTPException(status_code=403, detail="Not authorized")
     query: Dict[str, Any] = {}
     if action: query["action"] = action

@@ -22,12 +22,13 @@ export default function ProgresBarang() {
   const [progresList, setProgresList] = useState([]);
   const [poList, setPoList] = useState([]);
   const [barangList, setBarangList] = useState([]);
+  const [spks, setSpks] = useState([]);
   const [filterPO, setFilterPO] = useState("all");
   const [filterTanggal, setFilterTanggal] = useState("");
   const [open, setOpen] = useState(false);
   const [manual, setManual] = useState(false);
-  const [historyMap, setHistoryMap] = useState({}); // key: `${po_id}_${item_id}` -> [entries]
-  const [historyOpen, setHistoryOpen] = useState({}); // key -> boolean
+  const [historyMap, setHistoryMap] = useState({});
+  const [historyOpen, setHistoryOpen] = useState({});
   const [editEntryId, setEditEntryId] = useState(null);
   const initialForm = {
     po_id: "",
@@ -35,6 +36,8 @@ export default function ProgresBarang() {
     stage: "grinda",
     qty: 0,
     tanggal: new Date().toISOString().slice(0, 10),
+    pengrajin_id: "",
+    pengrajin_nama: "",
     nama_barang: "",
     nama_pengrajin: "",
     spesifikasi: "",
@@ -44,14 +47,16 @@ export default function ProgresBarang() {
 
   const load = async () => {
     try {
-      const [pr, po, br] = await Promise.all([
+      const [pr, po, br, spkRes] = await Promise.all([
         axios.get(`${API}/progres/by-po`),
         axios.get(`${API}/po`),
         axios.get(`${API}/barang`),
+        axios.get(`${API}/spk`),
       ]);
       setProgresList(pr.data);
       setPoList(po.data);
       setBarangList(br.data);
+      setSpks(spkRes.data);
     } catch (e) { console.error(e); }
   };
 
@@ -134,6 +139,8 @@ export default function ProgresBarang() {
       stage: entry.stage,
       qty: entry.qty,
       tanggal: entry.tanggal || new Date().toISOString().slice(0, 10),
+      pengrajin_id: entry.pengrajin_id || "",
+      pengrajin_nama: entry.pengrajin_nama || "",
       nama_barang: entry.nama_barang || "",
       nama_pengrajin: entry.nama_pengrajin || "",
       spesifikasi: entry.spesifikasi || "",
@@ -225,6 +232,24 @@ export default function ProgresBarang() {
                           </SelectContent>
                         </Select>
                       </div>
+                      {form.po_id && form.item_id && (
+                        <div>
+                          <Label>Pengrajin (dari alokasi SPK)</Label>
+                          {currentAllocations.length === 0 ? (
+                            <p className="text-xs text-[#F44336] mt-1">⚠️ Belum ada alokasi SPK untuk barang ini. Buat SPK dulu.</p>
+                          ) : (
+                            <Select value={form.pengrajin_id} onValueChange={(v) => {
+                              const a = currentAllocations.find(x => x.pengrajin_id === v);
+                              setForm(f => ({ ...f, pengrajin_id: v, pengrajin_nama: a?.pengrajin_nama || "" }));
+                            }}>
+                              <SelectTrigger data-testid="progres-select-pengrajin"><SelectValue placeholder="Pilih pengrajin" /></SelectTrigger>
+                              <SelectContent>
+                                {currentAllocations.map((a, i) => <SelectItem key={i} value={a.pengrajin_id}>{a.pengrajin_nama} (alokasi {a.qty})</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                          )}
+                        </div>
+                      )}
                     </>
                   ) : (
                     <>

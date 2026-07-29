@@ -14,6 +14,7 @@ import RekapData from "@/pages/RekapData";
 import Dashboard from "@/pages/Dashboard";
 import UserManagement from "@/pages/UserManagement";
 import ActivityLog from "@/pages/ActivityLog";
+import Pengrajin from "@/pages/Pengrajin";
 
 function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuth();
@@ -34,6 +35,7 @@ function App() {
             <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
               <Route index element={<Dashboard />} />
               <Route path="barang" element={<DatabaseBarang />} />
+              <Route path="pengrajin" element={<Pengrajin />} />
               <Route path="po" element={<POPage />} />
               <Route path="barang-masuk" element={<BarangMasuk />} />
               <Route path="staffing" element={<Staffing />} />
@@ -41,7 +43,7 @@ function App() {
               <Route path="progres" element={<ProgresBarang />} />
               <Route path="rekap" element={<RekapData />} />
               <Route path="users" element={<ProtectedRoute roles={["admin"]}><UserManagement /></ProtectedRoute>} />
-              <Route path="activity-log" element={<ProtectedRoute roles={["admin"]}><ActivityLog /></ProtectedRoute>} />
+              <Route path="activity-log" element={<ProtectedRoute roles={["admin", "owner"]}><ActivityLog /></ProtectedRoute>} />
             </Route>
           </Routes>
         </BrowserRouter>

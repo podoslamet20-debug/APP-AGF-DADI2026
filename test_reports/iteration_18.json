@@ -1,0 +1,60 @@
+{
+  "summary": "Iter18 major-refactor testing (owner role + Pengrajin CRUD + SPK allocations + BM/Progres per pengrajin). Backend 34/34 pytest passing. Frontend smoke tests pass for all critical flows: admin/owner sidebars, owner read-only enforcement, Pengrajin CRUD dialog, Database Barang without pengrajin fields, SPK/BM/Progres pages load.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/progres", "issue": "POST does NOT implement per-pengrajin pipeline validation — it uses aggregate _get_stage_sums() / _get_qty_masuk() ignoring the pengrajin_id. Only PUT /api/progres/{id} does the per-pengrajin validation (line 1170-1172). Also POST does not persist pengrajin_id in the doc (line 1116-1128) whereas PUT does (line 1211). Inconsistent — may lead to progres entries per-po/barang but not per-pengrajin. This means the requirement 'Progres per pengrajin — POST /api/progres validates pipeline per (po,barang,pengrajin)' is NOT met for the create path."},
+      {"endpoint": "ProgresEntry model", "issue": "class ProgresEntry (line 319) does not declare pengrajin_id field, but code at line 1168 references entry.pengrajin_id. This works only in the PUT handler which sets 'pengrajin_id = entry.pengrajin_id or \"\"' — Pydantic v2 will raise AttributeError if payload contains pengrajin_id since default extra='ignore' drops unknown attrs and the attribute is not defined. In practice PUT succeeded in isolated testing likely because the attribute access defaults via BaseModel __getattr__ path — but this is fragile. Recommend adding pengrajin_id: Optional[str] = None to ProgresEntry."},
+      {"endpoint": "POST /api/barang-masuk (owner)", "issue": "Owner POST /spk returns 403 correctly, but with an EMPTY items list (as in my test payload) the SPK write path also short-circuits — however with items[] = [] it must still pass Pydantic validation. Confirmed 403 is returned correctly. No fix needed; just note that role check happens after pydantic validation, so bad payloads yield 422 before RBAC 403."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ActivityLog page (owner)", "issue": "Page fires GET /api/users → 403 for owner (owner is not allowed to list users). Non-blocking but produces two console errors and 'Failed to load users' toast/log. Owner should not trigger the users fetch.", "selector": "activity-log page", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Multiple dialogs (Pengrajin, Barang add)", "issues": ["Radix DialogContent missing aria-describedby / DialogDescription in some dialogs — accessibility a11y warning in console. Not blocking."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter18_refactor.py",
+    "/app/test_reports/pytest/iter18.xml"
+  ],
+  "verification_details": {
+    "backend_pytest": "34 passed in 4.37s (test_iter18_refactor.py) — includes: owner login role, activity-log RBAC (admin/owner 200, staff/guest 403), owner 403 on POST /barang /pengrajin /po /spk, owner 200 on GETs, pengrajin CRUD + RBAC + validation (missing nama 400), SPK allocations validation (missing→400, sum mismatch→400, invalid pengrajin_id→400, valid multi-alloc→200), BM per-pengrajin validation (exceed alloc→400 with Indonesian message, valid→200), progres grinda≤BM (400 when exceed, 200 valid), servis>grinda→400, regression GETs.",
+    "frontend_smoke": {
+      "admin_sidebar": "all 11 nav items present (Dashboard, Database Barang, Pengrajin, PO, Barang Masuk, Staffing, SPK, Progres Barang, Rekap Data, User Management, Activity Log)",
+      "owner_sidebar": "10 items — includes Pengrajin + Activity Log, excludes User Management (nav-users count=0)",
+      "owner_role_badge": "OWNER",
+      "owner_readonly": "add-pengrajin-button not rendered for owner (count=0)",
+      "owner_activity_log_nav": "reaches /activity-log route",
+      "admin_pengrajin_create": "created TEST_UI_P_<ts> via dialog, visible on page (data-testid: add-pengrajin-button, input-pengrajin-nama/telepon/alamat/rekening, submit-pengrajin-button)",
+      "database_barang_form": "Confirmed pengrajin fields removed — form has only: Gambar, Nama Barang, Spesifikasi, Harga Pengrajin, Harga Jual, Catatan (screenshot verified)",
+      "spk_page": "loads, add-spk-button present",
+      "barang_masuk_page": "loads",
+      "progres_page": "loads"
+    }
+  },
+  "action_items": [
+    "HIGH: Fix POST /api/progres to do per-pengrajin pipeline validation using pengrajin_id (currently only PUT does it). Also persist pengrajin_id in the create doc. Otherwise per-pengrajin progres tracking spec is not met for the create path.",
+    "MEDIUM: Add pengrajin_id: Optional[str] = None to ProgresEntry Pydantic model (line 319) to avoid AttributeError in PUT handler.",
+    "LOW: ActivityLog page — guard the users fetch so owner role does not trigger a 403 request.",
+    "LOW: Add DialogDescription/aria-describedby to Radix Dialogs to silence a11y warnings."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 2437 lines — should be split into modules (auth, pengrajin, spk, bm, progres, rekap, pdf).",
+    "SPK legacy fallback: existing SPKs without allocations are still allowed via PUT (validation only runs for new payloads). Confirm data migration path or add legacy detection.",
+    "_get_bm_qty_per_pengrajin scans all BM docs per lookup — for large data volumes prefer an aggregate pipeline with $match+$group."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter18_refactor.py"
+  ],
+  "success_rate": {"backend": "100% (34/34)", "frontend": "100% smoke (9/9 checks)"},
+  "test_credentials": "admin@agfdata.com/admin123, staff@agfdata.com/staff123, tamu@agfdata.com/tamu123, owner@agfdata.com/owner123 (confirmed working)",
+  "seed_data_creation": "Backend tests create + clean up TEST_iter18_* barang, pengrajin (p1/p2), PO (TEST_ITER18_PO_<ts>), SPK, BM, and progres entries. Cleanup in test_99_cleanup. Frontend test leaves one TEST_UI_P_<ts> pengrajin behind (harmless).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter18 backend fully green on the refactor spec EXCEPT POST /api/progres per-pengrajin validation is missing (only PUT has it). ProgresEntry model missing pengrajin_id field declaration. Frontend UI additions (nav, Pengrajin CRUD, barang form cleanup, owner role gating) are all working. Deep SPK-allocations UI flow (import PO → allocate multi-pengrajin → save) was not exhaustively E2E-tested — only backend equivalents. If main agent fixes the POST /progres pengrajin gap, re-run /app/backend/tests/test_iter18_refactor.py::test_42_grinda_valid with a scenario where a second pengrajin has 0 BM and confirm that creating a progres entry against them is rejected.",
+  "rca of the issue": "For per-pengrajin progres gap: create_progres_entry (server.py line 1074-1137) branches on is_manual only, calls _get_stage_sums/_get_qty_masuk (aggregate); it does not read entry.pengrajin_id or call the _get_*_per_pengrajin helpers even though update_progres_entry does (line 1168-1172). Fix: mirror the pengrajin branch from PUT into POST and persist pengrajin_id (+ pengrajin_nama) in the insert doc."
+}
