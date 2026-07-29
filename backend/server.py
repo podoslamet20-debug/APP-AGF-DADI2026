@@ -322,6 +322,8 @@ class ProgresEntry(BaseModel):
     stage: str  # "grinda" | "servis" | "finishing" | "packing"
     qty: int = Field(ge=1)
     tanggal: Optional[str] = None
+    pengrajin_id: Optional[str] = None  # NEW: which pengrajin's allocation
+    pengrajin_nama: Optional[str] = None
     # Optional metadata (denormalized for display when item isn't from PO)
     nama_barang: Optional[str] = None
     nama_pengrajin: Optional[str] = None
@@ -1085,9 +1087,14 @@ async def create_progres_entry(entry: ProgresEntry, user: dict = Depends(get_cur
     
     po_id = entry.po_id or ""
     is_manual = not po_id
+    pengrajin_id = entry.pengrajin_id or ""
     
     # Compute stage sums + qty_masuk for validation
-    if is_manual:
+    if not is_manual and pengrajin_id:
+        # Per-pengrajin scope: use SPK-alloc pipeline
+        qty_masuk = await _get_bm_qty_per_pengrajin(po_id, entry.item_id, pengrajin_id)
+        sums = {s: await _get_progres_stage_per_pengrajin(po_id, entry.item_id, pengrajin_id, s) for s in VALID_STAGES}
+    elif is_manual:
         # Manual mode: only enforce internal pipeline (no qty_masuk)
         sums = await _get_stage_sums("", entry.item_id) if entry.item_id else {s: 0 for s in VALID_STAGES}
         qty_masuk = 0
@@ -1108,9 +1115,10 @@ async def create_progres_entry(entry: ProgresEntry, user: dict = Depends(get_cur
     sisa_before = (upstream - already_at_stage) if upstream != float('inf') else float('inf')
     
     if not is_manual and entry.qty > sisa_before:
+        scope = f" untuk pengrajin '{entry.pengrajin_nama or ''}'" if pengrajin_id else ""
         raise HTTPException(
             status_code=400,
-            detail=f"Qty {entry.stage} ({entry.qty}) melebihi sisa dari {upstream_label} ({upstream} - {already_at_stage} = {max(int(sisa_before),0)})"
+            detail=f"Qty {entry.stage} ({entry.qty}){scope} melebihi sisa dari {upstream_label} ({upstream} - {already_at_stage} = {max(int(sisa_before),0)})"
         )
     
     doc = {
@@ -1119,10 +1127,11 @@ async def create_progres_entry(entry: ProgresEntry, user: dict = Depends(get_cur
         "stage": entry.stage,
         "qty": entry.qty,
         "tanggal": entry.tanggal or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "pengrajin_id": pengrajin_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": user["_id"],
     }
-    for meta_key in ("nama_barang", "nama_pengrajin", "spesifikasi", "gambar_path"):
+    for meta_key in ("nama_barang", "nama_pengrajin", "pengrajin_nama", "spesifikasi", "gambar_path"):
         val = getattr(entry, meta_key, None)
         if val:
             doc[meta_key] = val

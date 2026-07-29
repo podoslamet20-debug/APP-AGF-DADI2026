@@ -32,7 +32,7 @@ const RESOURCES = [
 const ACTIONS = ["login", "logout", "login_failed", "create", "update", "delete"];
 
 export default function ActivityLog() {
-  const { API } = useAuth();
+  const { API, isAdmin } = useAuth();
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState({ action: "all", resource: "all", user_id: "", date_from: "", date_to: "" });
@@ -55,6 +55,7 @@ export default function ActivityLog() {
   };
 
   const loadUsers = async () => {
+    if (!isAdmin) return;  // Owner cannot list users (403)
     try { const { data } = await axios.get(`${API}/users`); setUsers(data); } catch (e) { console.error("Failed to load users:", e); }
   };
 
@@ -87,7 +88,7 @@ export default function ActivityLog() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={load} disabled={loading} data-testid="refresh-activity"><RefreshCw className={`w-4 h-4 mr-2 ${loading ? "animate-spin" : ""}`} /> Refresh</Button>
-          <Button variant="outline" size="sm" onClick={purgeOld} className="text-[#F44336]" data-testid="purge-activity"><Trash2 className="w-4 h-4 mr-2" /> Hapus Lama</Button>
+          {isAdmin && <Button variant="outline" size="sm" onClick={purgeOld} className="text-[#F44336]" data-testid="purge-activity"><Trash2 className="w-4 h-4 mr-2" /> Hapus Lama</Button>}
         </div>
       </div>
 
