@@ -82,6 +82,21 @@ export default function ProgresBarang() {
   const selectedProgres = progresList.find(p => p.po_id === form.po_id)?.items.find(i => i.barang_id === form.item_id);
   const selectedPO = poList.find(p => (p._id || p.id) === form.po_id);
 
+  // Get allocations (pengrajin list) for currently selected PO+barang
+  const currentAllocations = (() => {
+    if (!form.po_id || !form.item_id || !selectedPO) return [];
+    const poSpks = spks.filter(s => s.items?.some(si => si.no_po === selectedPO.no_po));
+    const allocs = [];
+    for (const spk of poSpks) {
+      for (const si of spk.items || []) {
+        if (si.no_po === selectedPO.no_po && si.barang_id === form.item_id) {
+          for (const a of si.allocations || []) allocs.push(a);
+        }
+      }
+    }
+    return allocs;
+  })();
+
   // Compute upstream/max for the current form.stage
   const getStageContext = () => {
     if (manual) return { max: Infinity, upstreamLabel: "—", upstreamQty: null, sisa: null };
