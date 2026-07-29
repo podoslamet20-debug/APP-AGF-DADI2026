@@ -29,7 +29,16 @@ export default function LoginPage() {
       toast.success("Login berhasil!");
       navigate("/");
     } catch (err) {
-      toast.error("Login gagal: " + (err.response?.data?.detail || "Coba lagi"));
+      const detail = err.response?.data?.detail;
+      const status = err.response?.status;
+      const msg = detail
+        ? `${detail} (${status})`
+        : err.message
+          ? `Network: ${err.message}`
+          : "Coba lagi";
+      toast.error("Login gagal: " + msg);
+      // eslint-disable-next-line no-console
+      console.error("Login error detail:", { status, detail, message: err.message, err });
     } finally {
       setLoading(false);
     }
