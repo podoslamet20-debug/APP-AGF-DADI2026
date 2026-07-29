@@ -1,5 +1,6 @@
 // craco.config.js
 const path = require("path");
+const webpack = require("webpack");
 require("dotenv").config();
 
 // Check if we're actually running the craco dev server (`craco start`)
@@ -111,6 +112,50 @@ let webpackConfig = {
       if (config.enableHealthCheck && healthPluginInstance) {
         webpackConfig.plugins.push(healthPluginInstance);
       }
+
+      // Explicitly exclude react-refresh from production builds. Even when
+      // @emergentbase/visual-edits is skipped, react-refresh can still be
+      // pulled in by react-scripts or other dependencies via some other
+      // import path. To guarantee it never ends up in the production
+      // bundle, mark it as an external and actively ignore/null it out at
+      // the webpack level.
+      if (isBuildCommand) {
+        webpackConfig.externals = webpackConfig.externals || {};
+        if (Array.isArray(webpackConfig.externals)) {
+          webpackConfig.externals.push({
+            "react-refresh": "react-refresh",
+            "react-refresh/runtime": "react-refresh/runtime",
+            "react-refresh/babel": "react-refresh/babel",
+          });
+        } else {
+          webpackConfig.externals["react-refresh"] = "react-refresh";
+          webpackConfig.externals["react-refresh/runtime"] = "react-refresh/runtime";
+          webpackConfig.externals["react-refresh/babel"] = "react-refresh/babel";
+        }
+
+        webpackConfig.plugins = webpackConfig.plugins || [];
+        webpackConfig.plugins.push(
+          new webpack.IgnorePlugin({
+            resourceRegExp: /^react-refresh(\/.*)?$/,
+          })
+        );
+        webpackConfig.plugins.push(
+          new webpack.NormalModuleReplacementPlugin(
+            /^react-refresh(\/.*)?$/,
+            path.resolve(__dirname, "scripts/react-refresh-noop.js")
+          )
+        );
+
+        // Suppress any residual react-refresh related warnings that may
+        // surface from other dependencies during the production build.
+        webpackConfig.ignoreWarnings = [
+          ...(webpackConfig.ignoreWarnings || []),
+          (warning) =>
+            typeof warning.message === "string" &&
+            warning.message.toLowerCase().includes("react-refresh"),
+        ];
+      }
+
       return webpackConfig;
     },
   },
