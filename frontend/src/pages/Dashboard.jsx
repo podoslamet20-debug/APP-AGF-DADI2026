@@ -2,12 +2,16 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import axios from "axios";
 import { Card } from "@/components/ui/card";
-import { Package, ShoppingCart, PackageOpen, Truck, FileText, TrendingUp } from "lucide-react";
+import { Package, ShoppingCart, PackageOpen, Truck, FileText, TrendingUp, Trophy, Hammer, Calendar } from "lucide-react";
 import { Link } from "react-router-dom";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export default function Dashboard() {
-  const { API, user } = useAuth();
+  const { API, user, isGuest } = useAuth();
   const [stats, setStats] = useState({ barang: 0, po: 0, barangMasuk: 0, staffing: 0, spk: 0 });
+  const [kinerjaMonth, setKinerjaMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [kinerja, setKinerja] = useState([]);
 
   useEffect(() => {
     const load = async () => {
@@ -19,19 +23,21 @@ export default function Dashboard() {
           axios.get(`${API}/staffing`),
           axios.get(`${API}/spk`),
         ]);
-        setStats({
-          barang: barang.data.length,
-          po: po.data.length,
-          barangMasuk: bm.data.length,
-          staffing: st.data.length,
-          spk: spk.data.length,
-        });
-      } catch (e) {
-        console.error(e);
-      }
+        setStats({ barang: barang.data.length, po: po.data.length, barangMasuk: bm.data.length, staffing: st.data.length, spk: spk.data.length });
+      } catch (e) { console.error(e); }
     };
     load();
   }, [API]);
+
+  useEffect(() => {
+    if (isGuest) return;
+    (async () => {
+      try {
+        const { data } = await axios.get(`${API}/dashboard/kinerja-pengrajin?month=${kinerjaMonth}`);
+        setKinerja(data.pengrajin || []);
+      } catch (e) { console.error(e); }
+    })();
+  }, [API, kinerjaMonth, isGuest]);
 
   const cards = [
     { label: "Database Barang", value: stats.barang, icon: Package, color: "#8B5A2B", link: "/barang" },
@@ -41,6 +47,9 @@ export default function Dashboard() {
     { label: "Total SPK", value: stats.spk, icon: FileText, color: "#9C27B0", link: "/spk" },
     { label: "Progres Barang", value: "Lihat", icon: TrendingUp, color: "#F44336", link: "/progres" },
   ];
+
+  const badgeColor = { "MVP": "bg-[#FFD700] text-[#5C4400]", "Produktif": "bg-[#4CAF50] text-white", "Perlu Improvement": "bg-[#FFC107] text-white", "Belum ada aktivitas": "bg-[#E5E5E5] text-[#5C5C5C]" };
+  const maxSelesai = Math.max(1, ...kinerja.map(k => k.qty_selesai));
 
   return (
     <div className="space-y-6" data-testid="dashboard-page">
@@ -66,6 +75,57 @@ export default function Dashboard() {
           </Link>
         ))}
       </div>
+
+      {!isGuest && (
+        <Card className="p-6 border border-[#E5E5E5]" data-testid="kinerja-pengrajin-card">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+            <div className="flex items-center gap-2">
+              <Trophy className="w-6 h-6 text-[#FFD700]" />
+              <h2 className="text-xl font-bold text-[#1A1A1A]" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>Kinerja Pengrajin</h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <Calendar className="w-4 h-4 text-[#5C5C5C]" />
+              <Label htmlFor="month-input" className="text-sm text-[#5C5C5C]">Bulan:</Label>
+              <Input id="month-input" type="month" value={kinerjaMonth} onChange={(e) => setKinerjaMonth(e.target.value)} className="w-40" data-testid="kinerja-month-picker" />
+            </div>
+          </div>
+          <p className="text-xs text-[#5C5C5C] mb-4">Ranking berdasarkan qty <strong>Packing</strong> bulan tsb + on-time rate SPK deadline di bulan tsb.</p>
+          {kinerja.length === 0 ? (
+            <div className="text-center py-8 text-[#5C5C5C]"><Hammer className="w-8 h-8 mx-auto mb-2 opacity-50" /> Belum ada data kinerja untuk bulan ini.</div>
+          ) : (
+            <div className="space-y-2" data-testid="kinerja-list">
+              {kinerja.slice(0, 10).map((k) => (
+                <div key={k.pengrajin_id} className="p-3 border border-[#E5E5E5] rounded-md hover:bg-[#FAFAFA]" data-testid={`kinerja-row-${k.rank}`}>
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-[#F0E6D6] flex items-center justify-center font-bold text-[#8B5A2B]" data-testid={`kinerja-rank-${k.rank}`}>#{k.rank}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-medium text-[#1A1A1A]">{k.pengrajin_nama}</p>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${badgeColor[k.badge] || 'bg-gray-200'}`} data-testid={`kinerja-badge-${k.rank}`}>{k.badge}</span>
+                      </div>
+                      <div className="mt-1 h-2 bg-[#F0E6D6] rounded-full overflow-hidden">
+                        <div className="h-full bg-[#8B5A2B] transition-all" style={{ width: `${(k.qty_selesai / maxSelesai) * 100}%` }} />
+                      </div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-lg font-bold text-[#1A1A1A]">{k.qty_selesai}</p>
+                      <p className="text-[10px] text-[#5C5C5C]">Packing bulan ini</p>
+                    </div>
+                    <div className="text-right flex-shrink-0 hidden md:block w-24">
+                      <p className="text-sm font-medium">
+                        {k.on_time_rate !== null ? (
+                          <span className={k.on_time_rate >= 80 ? "text-[#4CAF50]" : k.on_time_rate >= 50 ? "text-[#FFC107]" : "text-[#F44336]"}>{k.on_time_rate}%</span>
+                        ) : <span className="text-[#5C5C5C]">-</span>}
+                      </p>
+                      <p className="text-[10px] text-[#5C5C5C]">On-time ({k.on_time_count}/{k.total_spk_month})</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       <Card className="p-6 border border-[#E5E5E5]">
         <h2 className="text-xl font-bold text-[#1A1A1A] mb-4" style={{ fontFamily: "Cabinet Grotesk, system-ui" }}>Akses Cepat</h2>

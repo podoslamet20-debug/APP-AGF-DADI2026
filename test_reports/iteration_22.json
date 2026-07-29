@@ -1,0 +1,32 @@
+{
+  "summary": "Iter22 P2 Kinerja Pengrajin Dashboard — Backend: 6/6 pytest cases PASS (guest 403, default month, response shape, sort+rank, on-time scenario with seeded pipeline PO→SPK→BarangMasuk→grinda/servis/finishing/packing yielding qty_selesai=10, on_time_rate=100%, badge=MVP, and badge logic). Frontend UI verified via Playwright: kinerja-pengrajin-card visible for admin with month picker and 6 ranked rows (testids kinerja-row-1..N, kinerja-rank-1, kinerja-badge-1). Card NOT visible for guest role. Overall PASS.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/dashboard/kinerja-pengrajin", "issue": "on_time_rate is null (not 0) when total_spk_month==0. Frontend accepts null via `k.on_time_rate ?? 0` — works, but spec examples imply 0 default. Non-blocking."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter22_kinerja_pengrajin.py",
+    "/app/test_reports/pytest/iter22.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py line 2188 badge threshold uses `max(3, total//2)` — when total<=6, Produktif tier collapses to just rank 4-5, since max(3, 3)=3 means idx<3 is MVP and idx<3 for Produktif is empty. Formula only meaningfully separates tiers when total>=7. Consider `idx < 3 + max(1, total//2 - 3)` or clearer intent.",
+    "Nested async loop: for each SPK item, a separate db.po.find_one and db.progres.find is executed (O(N*M)). For a large month with many SPKs this becomes expensive. Consider aggregating packing sums into a dict up front keyed by (po_id, item_id, pengrajin_id, tanggal<=deadline)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter22_kinerja_pengrajin.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@agfdata.com/admin123, tamu@agfdata.com/tamu123 — verified working",
+  "seed_data_creation": "Test creates and cleans up TEST_ITER22_* pengrajin/barang/PO/SPK/BarangMasuk with random uuid suffix; DB cleanup script also run post-test to remove any stragglers.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter22 feature fully validated. Backend endpoint /api/dashboard/kinerja-pengrajin?month=YYYY-MM confirmed working with proper 403 on guest, default month, sort/rank, on-time computation, and badge assignment. Frontend Dashboard renders card + month picker + ranked rows with testids kinerja-pengrajin-card, kinerja-month-picker, kinerja-row-{rank}, kinerja-rank-{rank}, kinerja-badge-{rank}. Card is hidden for guest. Note: seeding a passing on-time scenario requires full pipeline (BarangMasuk before progres stages), because progres endpoint enforces sequential stage capacity."
+}

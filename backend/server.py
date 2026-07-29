@@ -2128,6 +2128,71 @@ class UserUpdate(BaseModel):
     name: Optional[str] = None
     role: Optional[str] = None
 
+@api_router.get("/dashboard/kinerja-pengrajin")
+async def get_kinerja_pengrajin(month: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """Ranking pengrajin per bulan. month=YYYY-MM (default=current)."""
+    if user["role"] == "guest":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not month:
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+    pengrajin_docs = await db.pengrajin.find({}).to_list(1000)
+    pengrajin_map = {str(p["_id"]): p.get("nama", "") for p in pengrajin_docs}
+    stats: Dict[str, Dict[str, Any]] = {}
+    def ensure(pid, nama):
+        if not pid: return None
+        stats.setdefault(pid, {"pengrajin_id": pid, "pengrajin_nama": nama or pengrajin_map.get(pid, ""), "qty_selesai": 0, "qty_masuk": 0, "spk_qty_month": 0, "on_time_count": 0, "total_spk_month": 0})
+        return stats[pid]
+    async for e in db.progres.find({"stage": "packing", "tanggal": {"$regex": f"^{month}"}}):
+        pid = e.get("pengrajin_id") or ""
+        s = ensure(pid, "")
+        if s: s["qty_selesai"] += int(e.get("qty", 0) or 0)
+    async for bm in db.barang_masuk.find({"tanggal_masuk": {"$regex": f"^{month}"}}):
+        for it in bm.get("items", []):
+            pid = it.get("pengrajin_id") or ""
+            s = ensure(pid, it.get("pengrajin_nama") or it.get("nama_pengrajin") or "")
+            if s: s["qty_masuk"] += int(it.get("qty_diterima", 0) or 0)
+    async for spk in db.spk.find({"deadline": {"$regex": f"^{month}"}}):
+        deadline = spk.get("deadline", "")
+        for it in spk.get("items", []):
+            pid = it.get("pengrajin_id") or ""
+            spk_qty = int(it.get("qty", 0) or 0)
+            if not pid or spk_qty == 0: continue
+            s = ensure(pid, it.get("pengrajin_nama") or "")
+            if not s: continue
+            s["spk_qty_month"] += spk_qty
+            s["total_spk_month"] += 1
+            po_id = ""
+            if it.get("no_po"):
+                po = await db.po.find_one({"no_po": it.get("no_po")})
+                if po: po_id = str(po["_id"])
+            match = {"stage": "packing", "pengrajin_id": pid, "item_id": it.get("barang_id"), "tanggal": {"$lte": deadline}}
+            if po_id: match["po_id"] = po_id
+            done = 0
+            async for pk in db.progres.find(match):
+                done += int(pk.get("qty", 0) or 0)
+            if done >= spk_qty:
+                s["on_time_count"] += 1
+    result = []
+    for s in stats.values():
+        rate = (s["on_time_count"] / s["total_spk_month"] * 100) if s["total_spk_month"] > 0 else None
+        s["on_time_rate"] = round(rate, 1) if rate is not None else None
+        result.append(s)
+    result.sort(key=lambda x: (-x["qty_selesai"], -(x["on_time_rate"] or 0)))
+    total = len(result)
+    for idx, s in enumerate(result):
+        s["rank"] = idx + 1
+        if s["qty_selesai"] == 0 and (s["on_time_rate"] or 0) == 0:
+            s["badge"] = "Belum ada aktivitas"
+        elif idx < 3:
+            s["badge"] = "MVP"
+        elif idx < max(3, total // 2):
+            s["badge"] = "Produktif"
+        else:
+            s["badge"] = "Perlu Improvement"
+    return {"month": month, "pengrajin": result}
+
+
+
 
 @api_router.get("/users")
 async def list_users(user: dict = Depends(get_current_user)):
