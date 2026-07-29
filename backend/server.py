@@ -1633,6 +1633,7 @@ async def get_rekap_per_pengrajin(
     for b in barang_masuk: b["_id"] = str(b["_id"])
     
     # Build result keyed by pengrajin nama (grouping)
+    # Also collect no_po_set and barang_set per pengrajin
     result: Dict[str, Dict[str, Any]] = {}
     
     def _match_filters(no_po_val, bid, pid, pnama):
@@ -1641,25 +1642,33 @@ async def get_rekap_per_pengrajin(
         if pengrajin_id and pid != pengrajin_id: return False
         return True
     
+    def _ensure(key, pid):
+        result.setdefault(key, {
+            "pengrajin_id": pid, "spk_qty": 0, "masuk_qty": 0,
+            "_no_po_set": set(), "_barang_set": set(),
+        })
+    
     for spk in spks:
         for item in spk.get("items", []):
-            # New schema
             pid = item.get("pengrajin_id") or ""
             pnama = item.get("pengrajin_nama") or item.get("nama_pengrajin") or "Unknown"
+            bang = item.get("nama_barang") or ""
+            npo = item.get("no_po") or ""
             if pid or pnama != "Unknown":
                 if not _match_filters(item.get("no_po"), item.get("barang_id"), pid, pnama): continue
-                key = pnama
-                result.setdefault(key, {"pengrajin_id": pid, "spk_qty": 0, "masuk_qty": 0})
-                result[key]["spk_qty"] += int(item.get("qty", 0) or 0)
-            # Legacy allocations
+                _ensure(pnama, pid)
+                result[pnama]["spk_qty"] += int(item.get("qty", 0) or 0)
+                if npo: result[pnama]["_no_po_set"].add(npo)
+                if bang: result[pnama]["_barang_set"].add(bang)
             for a in item.get("allocations", []) or []:
                 apid = a.get("pengrajin_id") or ""
                 anama = a.get("pengrajin_nama") or "Unknown"
                 if not _match_filters(item.get("no_po"), item.get("barang_id"), apid, anama): continue
-                if apid == pid: continue  # already counted above (new schema)
-                key = anama
-                result.setdefault(key, {"pengrajin_id": apid, "spk_qty": 0, "masuk_qty": 0})
-                result[key]["spk_qty"] += int(a.get("qty", 0) or 0)
+                if apid == pid: continue
+                _ensure(anama, apid)
+                result[anama]["spk_qty"] += int(a.get("qty", 0) or 0)
+                if npo: result[anama]["_no_po_set"].add(npo)
+                if bang: result[anama]["_barang_set"].add(bang)
     
     for bm in barang_masuk:
         if date_from and (bm.get("tanggal_masuk") or "") < date_from: continue
@@ -1672,7 +1681,24 @@ async def get_rekap_per_pengrajin(
             if key in result:
                 result[key]["masuk_qty"] += int(item.get("qty_diterima", 0) or 0)
     
-    return [{"pengrajin": k, **v, "remaining": v["spk_qty"] - v["masuk_qty"]} for k, v in result.items()]
+    out = []
+    for k, v in result.items():
+        no_po_list = sorted(v.pop("_no_po_set"))
+        barang_list = sorted(v.pop("_barang_set"))
+        out.append({
+            "pengrajin": k,
+            "pengrajin_id": v["pengrajin_id"],
+            "spk_qty": v["spk_qty"],
+            "masuk_qty": v["masuk_qty"],
+            "remaining": v["spk_qty"] - v["masuk_qty"],
+            "no_po_list": no_po_list,
+            "no_po": ", ".join(no_po_list),
+            "barang_list": barang_list,
+            "barang_dikerjakan": ", ".join(barang_list),
+        })
+    # Sort pengrajin A-Z
+    out.sort(key=lambda x: (x.get("pengrajin") or "").lower())
+    return out
 
 # ===== Export Routes =====
 def _fetch_image_flowable(gambar_path: Optional[str], max_width_mm: float = 30) -> Optional[RLImage]:
@@ -2279,69 +2305,98 @@ async def get_spk_allocations(no_po: str, barang_id: str, user: dict = Depends(g
 
 # ===== Additional Rekap Endpoints =====
 @api_router.get("/rekap/per-barang")
-async def get_rekap_per_barang(user: dict = Depends(get_current_user)):
-    """Rekap per barang: barang masuk - progres barang (packing) per barang."""
+async def get_rekap_per_barang(
+    no_po: Optional[str] = None,
+    barang_id: Optional[str] = None,
+    pengrajin_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    """Rekap per barang: aggregate qty_masuk & qty_packing per barang.
+    Collects ALL pengrajin names (from BM items) and ALL no_po values for each barang."""
     barang_masuk = await db.barang_masuk.find({}).to_list(1000)
     progres = await db.progres.find({}).to_list(1000)
 
-    # Aggregate barang masuk by barang_id
-    agg = {}
+    agg: Dict[str, Dict[str, Any]] = {}
     for bm in barang_masuk:
+        if date_from and (bm.get("tanggal_masuk") or "") < date_from: continue
+        if date_to and (bm.get("tanggal_masuk") or "") > date_to: continue
+        if no_po and no_po not in (bm.get("no_po") or ""): continue
         for item in bm.get("items", []):
             bid = item.get("barang_id")
-            if not bid:
-                continue
+            if not bid: continue
+            if barang_id and bid != barang_id: continue
+            if pengrajin_id and (item.get("pengrajin_id") or "") != pengrajin_id: continue
             if bid not in agg:
                 agg[bid] = {
                     "barang_id": bid,
                     "nama_barang": item.get("nama_barang", ""),
-                    "nama_pengrajin": item.get("nama_pengrajin", ""),
                     "gambar_path": item.get("gambar_path"),
                     "qty_masuk": 0,
                     "qty_packing": 0,
+                    "_pengrajin_set": set(),
+                    "_no_po_set": set(),
                 }
-            agg[bid]["qty_masuk"] += item.get("qty_diterima", 0)
+            agg[bid]["qty_masuk"] += item.get("qty_diterima", 0) or 0
+            pnama = item.get("pengrajin_nama") or item.get("nama_pengrajin") or ""
+            if pnama: agg[bid]["_pengrajin_set"].add(pnama)
+            if bm.get("no_po"): agg[bid]["_no_po_set"].add(bm["no_po"])
 
     for p in progres:
         bid = p.get("item_id")
         if bid in agg:
-            agg[bid]["qty_packing"] += p.get("packing", 0) or 0
+            agg[bid]["qty_packing"] += int(p.get("qty", 0) or 0) if p.get("stage") == "packing" else 0
 
     result = []
     for v in agg.values():
+        v["no_po_list"] = sorted(v.pop("_no_po_set"))
+        v["pengrajin_names"] = sorted(v.pop("_pengrajin_set"))
+        v["nama_pengrajin"] = ", ".join(v["pengrajin_names"])  # legacy field, now comma-joined
+        v["no_po"] = ", ".join(v["no_po_list"])
         v["kurang"] = v["qty_masuk"] - v["qty_packing"]
         result.append(v)
+    # Sort by nama_barang A-Z
+    result.sort(key=lambda x: (x.get("nama_barang") or "").lower())
     if user["role"] == "guest":
         for r in result:
             r.pop("nama_pengrajin", None)
+            r.pop("pengrajin_names", None)
     return result
 
 
 @api_router.get("/rekap/progres")
-async def get_rekap_progres(user: dict = Depends(get_current_user)):
-    """Rekap progres berdasarkan PO+barang - aggregate dari stage entries (new model) + sisa per stage."""
+async def get_rekap_progres(
+    no_po: Optional[str] = None,
+    barang_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    """Rekap progres per PO+barang. Aggregate from stage entries."""
     barang_masuk = await db.barang_masuk.find({}).to_list(1000)
     
-    # Aggregate qty_masuk per PO+barang
     bm_agg: Dict[str, Dict[str, Any]] = {}
     for bm in barang_masuk:
+        if no_po and no_po not in (bm.get("no_po") or ""): continue
+        if date_from and (bm.get("tanggal_masuk") or "") < date_from: continue
+        if date_to and (bm.get("tanggal_masuk") or "") > date_to: continue
         po_id = bm.get("po_id", "")
         for item in bm.get("items", []):
             bid = item.get("barang_id")
             if not bid: continue
+            if barang_id and bid != barang_id: continue
             k = f"{po_id}_{bid}"
             if k not in bm_agg:
                 bm_agg[k] = {
                     "po_id": po_id,
                     "no_po": bm.get("no_po", ""),
                     "nama_barang": item.get("nama_barang", ""),
-                    "nama_pengrajin": item.get("nama_pengrajin", ""),
                     "gambar_path": item.get("gambar_path"),
                     "qty_masuk": 0,
                 }
             bm_agg[k]["qty_masuk"] += item.get("qty_diterima", 0) or 0
     
-    # Aggregate stage sums + last tanggal via $group over stage entries
     pipeline = [
         {"$match": {"stage": {"$in": VALID_STAGES}}},
         {"$group": {
@@ -2365,22 +2420,15 @@ async def get_rekap_progres(user: dict = Depends(get_current_user)):
     result = []
     for k, info in bm_agg.items():
         st = stage_agg.get(k, {s: 0 for s in VALID_STAGES})
-        grinda = st.get("grinda", 0)
-        servis = st.get("servis", 0)
-        finishing = st.get("finishing", 0)
-        packing = st.get("packing", 0)
+        grinda = st.get("grinda", 0); servis = st.get("servis", 0); finishing = st.get("finishing", 0); packing = st.get("packing", 0)
         qty_masuk = info["qty_masuk"]
         result.append({
             "po_id": info["po_id"],
             "no_po": info["no_po"],
             "nama_barang": info["nama_barang"],
-            "nama_pengrajin": info["nama_pengrajin"],
             "gambar_path": info["gambar_path"],
             "qty_masuk": qty_masuk,
-            "grinda": grinda,
-            "servis": servis,
-            "finishing": finishing,
-            "packing": packing,
+            "grinda": grinda, "servis": servis, "finishing": finishing, "packing": packing,
             "sisa_grinda": max(qty_masuk - grinda, 0),
             "sisa_servis": max(grinda - servis, 0),
             "sisa_finishing": max(servis - finishing, 0),
@@ -2388,9 +2436,8 @@ async def get_rekap_progres(user: dict = Depends(get_current_user)):
             "tanggal_terakhir": st.get("tanggal", "") or "",
             "komplit": packing >= qty_masuk and qty_masuk > 0,
         })
-    if user["role"] == "guest":
-        for r in result:
-            r.pop("nama_pengrajin", None)
+    # Sort by nama_barang A-Z, then no_po
+    result.sort(key=lambda x: ((x.get("nama_barang") or "").lower(), x.get("no_po") or ""))
     return result
 
 

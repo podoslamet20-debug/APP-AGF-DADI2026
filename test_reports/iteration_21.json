@@ -1,0 +1,24 @@
+{
+  "summary": "Iter21 Rekap enhancements verified. Backend: 18/18 tests pass in test_iter21_rekap.py — new fields no_po_list/pengrajin_names/barang_list + comma-joined no_po/nama_pengrajin/barang_dikerjakan present on per-barang & per-pengrajin; sort A-Z by nama_barang / pengrajin; filters (no_po/barang_id/pengrajin_id/date_from/date_to) narrow results correctly on all three endpoints; /api/rekap/progres no longer emits nama_pengrajin field; qty_packing correctly aggregated from progres stage=packing (seed 50 masuk → 10 packing → kurang 40). Exports (staffing pdf/excel, barang-masuk pdf/excel, progres pdf) all return >500 bytes. Regression: /api/rekap/all-po and /api/rekap/staffing-summary still OK. Frontend: 5 tabs (PO/Per Barang/Progres/Per Pengrajin/Staffing) each render the shared FilterPanel with all 7 required testids (filter-no-po, filter-barang, filter-pengrajin, filter-date-from, filter-date-to, toggle-sort-az, reset-rekap-filters) and per-tab print button testids (print-po, print-barang, print-progres, print-pengrajin, print-staffing-summary). Progres header row confirmed to have NO 'Pengrajin' column. Per Barang has 'Pengrajin (semua)' + 'No PO' columns. Per Pengrajin has 'No PO' + 'Barang Dikerjakan (dari SPK)' columns. Sort A-Z toggle + Reset click both work without errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter21_rekap.py",
+    "/app/test_reports/pytest/iter21.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py continues to grow (~2721 lines) — modularization overdue (carryover from prior iterations).",
+    "get_rekap_per_barang applies pengrajin_id filter to BM items only, which is correct for narrowing qty_masuk but means pengrajin_names may still include the filtered-out pengrajin from other BM rows on the same barang; current behavior actually filters those out because agg is keyed per-barang and we skip non-matching BM items entirely — verified in test_filter_pengrajin_narrows. OK, but worth a code comment.",
+    "get_rekap_per_pengrajin: allocations[] legacy branch adds spk_qty separately from primary pengrajin_id branch, which could double-count if a legacy SPK item has BOTH pengrajin_id AND allocations[] with same pid — the `if apid == pid: continue` guard handles equality but not full alloc list vs multiple items. Not exercised by iter21 seed; consider unit test if legacy data still exists in prod.",
+    "get_rekap_per_barang qty_packing loop iterates all progres docs even when barang_id filter is set — minor perf; add early continue on filtered agg keys."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter21_rekap.py (new, 18 tests)"],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "100% (all testids & column expectations verified across 5 tabs)"},
+  "test_credentials": "admin@agfdata.com/admin123 verified working",
+  "seed_data_creation": "test_iter21_rekap creates ITER21_<ts>_Aida & ITER21_<ts>_Budi pengrajin, ITER21_<ts>_Meja barang, PO ITER21_<ts>_PO qty=100 with 2 SPKs (60/40), 2 BMs (30/20), and a full grinda→servis→finishing→packing progres chain qty=10 for pengrajin1. No teardown fixture — prefixed with ITER21_ for identification.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter21 Rekap fully verified. Backend responses for per-barang/per-pengrajin now include both list fields (no_po_list, pengrajin_names, barang_list) AND comma-joined string fields (no_po, nama_pengrajin, barang_dikerjakan) for frontend flexibility. Rekap Progres endpoint has stopped returning nama_pengrajin. All 5 Rekap tabs render the shared FilterPanel — testids are stable and covered.",
+  "rca of the issue": "N/A — all features working as spec."
+}
