@@ -58,6 +58,11 @@ api_router = APIRouter(prefix="/api")
 async def health_check():
     return {"status": "ok"}
 
+@app.get("/api/health")
+async def health_check_api():
+    """Health check with /api prefix (used by Railway healthcheck + Kubernetes ingress)."""
+    return {"status": "ok", "service": "agfdata-backend"}
+
 # ===== Activity Log Middleware =====
 # Descriptions for common endpoints to make logs readable
 RESOURCE_LABEL = {
