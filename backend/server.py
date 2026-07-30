@@ -2883,6 +2883,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def add_credentials_header_middleware(request: Request, call_next):
+    """Explicitly ensure Access-Control-Allow-Credentials is set on responses
+    for whitelisted origins. Starlette's CORSMiddleware can, in some edge cases
+    (e.g. when proxied through Cloudflare on a custom domain), fail to emit this
+    header consistently. Without it, browsers will silently refuse to send
+    cookies/JWT tokens on cross-origin requests, resulting in 401s even though
+    the request itself succeeds.
+    """
+    origin = request.headers.get("origin", "")
+    cors_origins = [
+        o.strip()
+        for o in os.environ.get(
+            "CORS_ORIGINS",
+            "https://app-agf-dadi2026-frontend-production.up.railway.app,"
+            "http://localhost:3000,"
+            "http://localhost:8080"
+        ).split(",")
+        if o.strip()
+    ]
+
+    response = await call_next(request)
+
+    if origin in cors_origins:
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+
+    return response
+
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
