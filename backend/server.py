@@ -51,6 +51,29 @@ JWT_ALGORITHM = "HS256"
 
 # Create the main app
 app = FastAPI()
+
+# Setup CORS dengan explicit allowed origins (bukan wildcard)
+# Wildcard '*' tidak bisa dipakai bersama allow_credentials=True karena
+# browser akan blok response (CORS security policy).
+default_origins = (
+    "https://app-agf-dadi2026-frontend-production.up.railway.app,"
+    "http://localhost:3000,"
+    "http://localhost:8080"
+)
+cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ORIGINS", default_origins).split(",")
+    if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,  # PENTING: allow cookies/auth headers
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 api_router = APIRouter(prefix="/api")
 
 # ===== Health Check =====
@@ -2874,14 +2897,6 @@ async def purge_activity_log(before: Optional[str] = None, user: dict = Depends(
 
 # Include router
 app.include_router(api_router)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
