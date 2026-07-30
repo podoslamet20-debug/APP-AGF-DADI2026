@@ -555,7 +555,7 @@ async def login(request: LoginRequest, req: Request, response: Response):
         })
     except Exception: pass
     
-    return {"_id": user_id, "email": user["email"], "name": user["name"], "role": user["role"]}
+    return {"_id": user_id, "email": user["email"], "name": user["name"], "role": user["role"], "access_token": token, "token_type": "bearer"}
 
 @api_router.get("/auth/me")
 async def get_me(request: Request):
