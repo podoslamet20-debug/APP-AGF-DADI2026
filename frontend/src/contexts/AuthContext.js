@@ -86,9 +86,16 @@ export function AuthProvider({ children }) {
   };
 
   const logout = async () => {
+    // Clear the localStorage token fallback immediately, before the API call.
+    // This guarantees local auth state is wiped even if the network request
+    // fails or never completes, preventing a stale token from being reused
+    // by the request interceptor on the next page load/refresh.
+    setStoredToken(null);
     try {
       await axios.post(`${API}/auth/logout`);
     } finally {
+      // Clear again defensively and reset user state, whether the logout
+      // request succeeded or failed.
       setStoredToken(null);
       setUser(null);
     }
