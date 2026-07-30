@@ -1,7 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Header, Query, UploadFile, File, Depends
 from fastapi.responses import StreamingResponse, FileResponse
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient
 from gridfs import GridFS
@@ -49,8 +48,47 @@ APP_NAME = "agfdata"
 JWT_SECRET = os.environ.get("JWT_SECRET", "agfdata-secret-key-change-in-production")
 JWT_ALGORITHM = "HS256"
 
+from fastapi.middleware.cors import CORSMiddleware
+
 # Create the main app
 app = FastAPI()
+
+# ===== CORS Middleware =====
+# Setup explicit allowed origins (not wildcard) with credentials support
+default_origins = (
+    "https://app-agf-dadi2026-frontend-production.up.railway.app,"
+    "https://agfdata.com,"
+    "http://localhost:3000,"
+    "http://localhost:8080"
+)
+cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ORIGINS", default_origins).split(",")
+    if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,  # Allow cookies/JWT
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ===== Credentials Header Middleware =====
+# Explicitly set Access-Control-Allow-Credentials: true for all whitelisted origins
+# This ensures browsers will send cookies on cross-domain requests (e.g., agfdata.com → backend)
+@app.middleware("http")
+async def add_credentials_header_middleware(request: Request, call_next):
+    origin = request.headers.get("origin", "")
+
+    response = await call_next(request)
+
+    if origin in cors_origins:
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+
+    return response
+
 api_router = APIRouter(prefix="/api")
 
 # ===== Health Check =====
@@ -2874,14 +2912,6 @@ async def purge_activity_log(before: Optional[str] = None, user: dict = Depends(
 
 # Include router
 app.include_router(api_router)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
