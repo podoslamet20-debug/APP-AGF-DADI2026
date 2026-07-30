@@ -593,7 +593,13 @@ async def login(request: LoginRequest, req: Request, response: Response):
         })
     except Exception: pass
     
-    return {"_id": user_id, "email": user["email"], "name": user["name"], "role": user["role"]}
+    return {
+        "access_token": token,
+        "_id": user_id,
+        "email": user["email"],
+        "name": user["name"],
+        "role": user["role"],
+    }
 
 @api_router.get("/auth/me")
 async def get_me(request: Request):
