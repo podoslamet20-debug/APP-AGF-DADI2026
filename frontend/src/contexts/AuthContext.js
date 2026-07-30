@@ -4,7 +4,20 @@ import axios from "axios";
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-axios.defaults.withCredentials = true;
+const TOKEN_STORAGE_KEY = "access_token";
+
+// Attach the Authorization header to every outgoing request. This replaces
+// cookie-based auth (which requires same-domain/subdomain) with a Bearer
+// token approach that works across custom domains (e.g. agfdata.com) and
+// the Railway-provided backend domain.
+axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem(TOKEN_STORAGE_KEY);
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
 
 const AuthContext = createContext(null);
 
@@ -14,10 +27,17 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     const checkAuth = async () => {
+      const token = localStorage.getItem(TOKEN_STORAGE_KEY);
+      if (!token) {
+        setUser(null);
+        setLoading(false);
+        return;
+      }
       try {
         const { data } = await axios.get(`${API}/auth/me`);
         setUser(data);
       } catch {
+        localStorage.removeItem(TOKEN_STORAGE_KEY);
         setUser(null);
       } finally {
         setLoading(false);
@@ -28,13 +48,20 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const { data } = await axios.post(`${API}/auth/login`, { email, password });
+    if (data?.access_token) {
+      localStorage.setItem(TOKEN_STORAGE_KEY, data.access_token);
+    }
     setUser(data);
     return data;
   };
 
   const logout = async () => {
-    await axios.post(`${API}/auth/logout`);
-    setUser(null);
+    try {
+      await axios.post(`${API}/auth/logout`);
+    } finally {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+      setUser(null);
+    }
   };
 
   const isAdmin = user?.role === "admin";
