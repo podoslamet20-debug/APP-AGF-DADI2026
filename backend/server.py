@@ -555,7 +555,15 @@ async def login(request: LoginRequest, req: Request, response: Response):
         })
     except Exception: pass
     
-    return {"_id": user_id, "email": user["email"], "name": user["name"], "role": user["role"]}
+    # Include the token in the response body as well. Mobile browsers (iOS Safari,
+    # some Android webviews) can be inconsistent about persisting Set-Cookie
+    # headers, especially across cross-site/cross-subdomain requests. Returning
+    # the token lets the frontend store it in localStorage and fall back to
+    # sending it via the Authorization header on subsequent requests.
+    return {
+        "_id": user_id, "email": user["email"], "name": user["name"], "role": user["role"],
+        "access_token": token,
+    }
 
 @api_router.get("/auth/me")
 async def get_me(request: Request):
