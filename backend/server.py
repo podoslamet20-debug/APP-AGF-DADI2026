@@ -2924,6 +2924,6 @@ app.add_middleware(
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    Register API router with /api prefix
-app.include_router(api_router)
+# Register API router with /api prefix
+    app.include_router(api_router)
     client.close()
