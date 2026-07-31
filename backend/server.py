@@ -547,8 +547,6 @@ async def startup_event():
             logger.warning(f"Migration warning: {e}")
         
         logger.info("Startup completed successfully")
-        # Register API routes
-app.include_router(api_router)
     except Exception as e:
         logger.error(f"Startup error: {e}")
 
@@ -2913,9 +2911,6 @@ async def purge_activity_log(before: Optional[str] = None, user: dict = Depends(
     return {"deleted": result.deleted_count}
 
 
-# Include router
-app.include_router(api_router)
-
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -2927,3 +2922,6 @@ app.add_middleware(
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+# Register all API routes with the FastAPI app
+app.include_router(api_router)
