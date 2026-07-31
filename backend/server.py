@@ -2926,4 +2926,6 @@ app.add_middleware(
 async def shutdown_db_client():
 # Register API router with /api prefix
     app.include_router(api_router)
+    # Register API routes with FastAPI app
+app.include_router(api_router)
     client.close()
