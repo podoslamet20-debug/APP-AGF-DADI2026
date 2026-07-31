@@ -51,6 +51,37 @@ JWT_ALGORITHM = "HS256"
 
 # Create the main app
 app = FastAPI()
+
+# ===== CORS Middleware =====
+default_origins = (
+    "https://app.agfdata.com,"
+    "https://app-agf-dadi2026-frontend-production.up.railway.app,"
+    "http://localhost:3000,"
+    "http://localhost:8080"
+)
+cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ORIGINS", default_origins).split(",")
+    if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ===== Credentials Header Middleware =====
+@app.middleware("http")
+async def add_credentials_header_middleware(request: Request, call_next):
+    origin = request.headers.get("origin", "")
+    response = await call_next(request)
+    if origin in cors_origins:
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
+
 api_router = APIRouter(prefix="/api")
 
 # ===== Health Check =====
