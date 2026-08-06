@@ -105,14 +105,15 @@ export function AuthProvider({ children }) {
   const isStaff = user?.role === "staff";
   const isGuest = user?.role === "guest";
   const isOwner = user?.role === "owner";
-  const canEdit = isAdmin;                          // full CRUD (create/edit/delete)
-  const canEditPartial = isAdmin || isStaff;        // partial editors: BM, staffing, progres
-  const canSeePrice = isAdmin || isOwner;           // owner sees prices (view-only)
+  const canCreate = isAdmin || isStaff;             // staff can create new entries
+  const canEdit = isAdmin;                          // admin only can edit/delete
+  const canEditQty = isAdmin || isStaff;            // future use: qty-only editing
+  const canSeePrice = isAdmin || isOwner;
   const canSeeCraftsman = isAdmin || isStaff || isOwner;
   const canSeeActivityLog = isAdmin || isOwner;
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, isAdmin, isStaff, isGuest, isOwner, canEdit, canEditPartial, canSeePrice, canSeeCraftsman, canSeeActivityLog, API }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, isAdmin, isStaff, isGuest, isOwner, canCreate, canEdit, canEditQty, canSeePrice, canSeeCraftsman, canSeeActivityLog, API }}>
       {children}
     </AuthContext.Provider>
   );

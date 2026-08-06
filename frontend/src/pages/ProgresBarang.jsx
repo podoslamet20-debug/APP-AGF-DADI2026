@@ -18,7 +18,7 @@ const STAGES = [
 ];
 
 export default function ProgresBarang() {
-  const { API, canEdit, canEditPartial, canSeeCraftsman } = useAuth();
+  const { API, canCreate, canEdit, canSeeCraftsman } = useAuth();
   const [progresList, setProgresList] = useState([]);
   const [poList, setPoList] = useState([]);
   const [barangList, setBarangList] = useState([]);
@@ -221,7 +221,7 @@ export default function ProgresBarang() {
           <p className="text-[#5C5C5C] mt-1">Tracking per tanggal: Grinda → Servis → Finishing → Packing. Setiap input jadi entry baru.</p>
         </div>
         <div className="flex gap-2 flex-wrap items-end">
-          {canEditPartial && (
+          {canCreate && (
             <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setManual(false); setForm(initialForm); } }}>
               <DialogTrigger asChild>
                 <Button className="bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="add-progres-button"><Plus className="w-4 h-4 mr-2" /> Tambah Progres</Button>
