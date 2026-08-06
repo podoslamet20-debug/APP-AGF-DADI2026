@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { Plus, PackageOpen, Download, Package, Search, Trash2, Edit, Eye, Printer, CheckCircle2 } from "lucide-react";
 
 export default function BarangMasuk() {
-  const { API, canEditPartial, canSeeCraftsman } = useAuth();
+  const { API, canCreate, canEdit, canSeeCraftsman } = useAuth();
   const [items, setItems] = useState([]);
   const [pos, setPos] = useState([]);
   const [spks, setSpks] = useState([]);
@@ -242,7 +242,7 @@ export default function BarangMasuk() {
           <Button variant="outline" onClick={downloadAllPDF} data-testid="export-pdf-bm"><Download className="w-4 h-4 mr-2" /> PDF</Button>
           <Button variant="outline" onClick={downloadExcel} data-testid="export-excel-bm"><Download className="w-4 h-4 mr-2" /> Excel</Button>
           <Button variant="outline" onClick={printPage} data-testid="print-bm"><Printer className="w-4 h-4 mr-2" /> Print</Button>
-          {canEditPartial && (
+          {canCreate && (
             <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditingId(null); setForm({ po_id: "", tanggal_masuk: "", penerima: "", items: [] }); setSelectedPO(null); }}}>
               <DialogTrigger asChild>
                 <Button className="bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="add-bm-button"><Plus className="w-4 h-4 mr-2" /> Catat Masuk</Button>
@@ -341,8 +341,8 @@ export default function BarangMasuk() {
                   </div>
                   <div className="flex gap-2 flex-wrap">
                     <Button variant="outline" size="sm" onClick={() => setPreview(bm)} data-testid={`preview-bm-${idx}`}><Eye className="w-3 h-3 mr-1" /> Preview</Button>
-                    {canEditPartial && <Button variant="outline" size="sm" onClick={() => startEdit(bm)} data-testid={`edit-bm-${idx}`}><Edit className="w-3 h-3 mr-1" /> Edit</Button>}
-                    {canEditPartial && (
+                    {canEdit && <Button variant="outline" size="sm" onClick={() => startEdit(bm)} data-testid={`edit-bm-${idx}`}><Edit className="w-3 h-3 mr-1" /> Edit</Button>}
+                    {canEdit && (
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button variant="outline" size="sm" className="text-[#F44336]" data-testid={`delete-bm-${idx}`}><Trash2 className="w-3 h-3" /></Button>
