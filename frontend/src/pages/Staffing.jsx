@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { Plus, Truck, Package, Search, Trash2, Edit, Eye, Download, Printer, CheckCircle2 } from "lucide-react";
 
 export default function Staffing() {
-  const { API, canEditPartial, canSeeCraftsman } = useAuth();
+  const { API, canCreate, canEdit, canSeeCraftsman } = useAuth();
   const [items, setItems] = useState([]);
   const [pos, setPos] = useState([]);
   const [pengrajinList, setPengrajinList] = useState([]);
@@ -176,7 +176,7 @@ export default function Staffing() {
           <Button variant="outline" onClick={downloadExcel} data-testid="export-excel-staffing"><Download className="w-4 h-4 mr-2" /> Excel</Button>
           <Button variant="outline" onClick={printPage} data-testid="print-staffing"><Printer className="w-4 h-4 mr-2" /> Print</Button>
         </div>
-        {canEditPartial && (
+        {canCreate && (
           <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditingId(null); setForm({ po_id: "", tanggal_keluar: "", items: [] }); setSelectedPO(null); }}}>
             <DialogTrigger asChild>
               <Button className="bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="add-staffing-button"><Plus className="w-4 h-4 mr-2" /> Catat Staffing</Button>
@@ -310,8 +310,8 @@ export default function Staffing() {
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <Button variant="outline" size="sm" onClick={() => setPreview(st)} data-testid={`preview-staffing-${idx}`}><Eye className="w-3 h-3 mr-1" /> Preview</Button>
-                  {canEditPartial && <Button variant="outline" size="sm" onClick={() => startEdit(st)} data-testid={`edit-staffing-${idx}`}><Edit className="w-3 h-3 mr-1" /> Edit</Button>}
-                  {canEditPartial && (
+                  {canEdit && <Button variant="outline" size="sm" onClick={() => startEdit(st)} data-testid={`edit-staffing-${idx}`}><Edit className="w-3 h-3 mr-1" /> Edit</Button>}
+                  {canEdit && (
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
                         <Button variant="outline" size="sm" className="text-[#F44336]" data-testid={`delete-staffing-${idx}`}><Trash2 className="w-3 h-3" /></Button>
