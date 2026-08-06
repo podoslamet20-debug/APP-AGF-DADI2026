@@ -18,7 +18,7 @@ const STAGES = [
 ];
 
 export default function ProgresBarang() {
-  const { API, canEditPartial, canSeeCraftsman } = useAuth();
+  const { API, canEdit, canEditPartial, canSeeCraftsman } = useAuth();
   const [progresList, setProgresList] = useState([]);
   const [poList, setPoList] = useState([]);
   const [barangList, setBarangList] = useState([]);
@@ -412,7 +412,7 @@ export default function ProgresBarang() {
                                   <span className="font-medium">+{e.qty}</span>
                                   <span className="text-[#5C5C5C]">•</span>
                                   <span className="text-xs text-[#5C5C5C]"><Calendar className="w-3 h-3 inline mr-0.5" />{e.tanggal}</span>
-                                  {canEditPartial && (
+                                  {canEdit && (
                                     <div className="ml-auto flex gap-1">
                                       <Button variant="ghost" size="sm" className="text-[#2196F3] text-xs h-6 px-2" onClick={() => startEditEntry(e)} data-testid={`edit-entry-${e._id}`}>Edit</Button>
                                       <Button variant="ghost" size="sm" className="text-[#F44336] text-xs h-6 px-2" onClick={() => deleteEntry(e._id, po.po_id, item.barang_id)}>Hapus</Button>
