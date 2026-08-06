@@ -18,7 +18,7 @@ const STAGES = [
 ];
 
 export default function ProgresBarang() {
-  const { API, canEditPartial, canSeeCraftsman } = useAuth();
+  const { API, canCreate, canEdit, canEditQty, canSeeCraftsman } = useAuth();
   const [progresList, setProgresList] = useState([]);
   const [poList, setPoList] = useState([]);
   const [barangList, setBarangList] = useState([]);
@@ -221,7 +221,7 @@ export default function ProgresBarang() {
           <p className="text-[#5C5C5C] mt-1">Tracking per tanggal: Grinda → Servis → Finishing → Packing. Setiap input jadi entry baru.</p>
         </div>
         <div className="flex gap-2 flex-wrap items-end">
-          {canEditPartial && (
+          {canCreate && (
             <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setManual(false); setForm(initialForm); } }}>
               <DialogTrigger asChild>
                 <Button className="bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="add-progres-button"><Plus className="w-4 h-4 mr-2" /> Tambah Progres</Button>
@@ -412,10 +412,10 @@ export default function ProgresBarang() {
                                   <span className="font-medium">+{e.qty}</span>
                                   <span className="text-[#5C5C5C]">•</span>
                                   <span className="text-xs text-[#5C5C5C]"><Calendar className="w-3 h-3 inline mr-0.5" />{e.tanggal}</span>
-                                  {canEditPartial && (
+                                  {(canEditQty || canEdit) && (
                                     <div className="ml-auto flex gap-1">
-                                      <Button variant="ghost" size="sm" className="text-[#2196F3] text-xs h-6 px-2" onClick={() => startEditEntry(e)} data-testid={`edit-entry-${e._id}`}>Edit</Button>
-                                      <Button variant="ghost" size="sm" className="text-[#F44336] text-xs h-6 px-2" onClick={() => deleteEntry(e._id, po.po_id, item.barang_id)}>Hapus</Button>
+                                      {canEditQty && <Button variant="ghost" size="sm" className="text-[#2196F3] text-xs h-6 px-2" onClick={() => startEditEntry(e)} data-testid={`edit-entry-${e._id}`}>Edit</Button>}
+                                      {canEdit && <Button variant="ghost" size="sm" className="text-[#F44336] text-xs h-6 px-2" onClick={() => deleteEntry(e._id, po.po_id, item.barang_id)}>Hapus</Button>}
                                     </div>
                                   )}
                                 </div>
