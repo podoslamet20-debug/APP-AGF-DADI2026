@@ -480,6 +480,22 @@ export default function ProgresBarang() {
                             <Label className="text-xs" style={{ color: stage.color }}>{stage.label}</Label>
                             <div className="mt-1 text-2xl font-bold" style={{ color: stage.color }} data-testid={`progres-${stage.key}-${poIdx}-${idx}`}>{item[stage.key] || 0}</div>
                             <p className="text-xs text-[#5C5C5C]" data-testid={`progres-sisa-${stage.key}-${poIdx}-${idx}`}>Sisa: <strong className="text-[#1A1A1A]">{item[`sisa_${stage.key}`] || 0}</strong></p>
+                            {stage.key === "finishing" && (
+                              <div className="mt-2 text-xs text-[#666] border-t border-[#E5E5E5] pt-2" data-testid={`progres-finishing-catatan-${poIdx}-${idx}`}>
+                                {[1, 2, 3, 4, 5].map((n) => {
+                                  const catatanKey = `catatan_finishing_${n}`;
+                                  const catatan = historyMap[k]?.find(e => e.stage === "finishing" && e[catatanKey])?.[catatanKey];
+                                  return catatan ? (
+                                    <p key={n} className="text-[#5C5C5C] my-1">
+                                      📌 {catatan}
+                                    </p>
+                                  ) : null;
+                                })}
+                                {historyMap[k]?.filter(e => e.stage === "finishing" && [1,2,3,4,5].some(n => e[`catatan_finishing_${n}`])).length === 0 && (
+                                  <p className="text-[#999] italic">Belum ada catatan</p>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
