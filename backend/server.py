@@ -2923,5 +2923,76 @@ app.add_middleware(
 async def shutdown_db_client():
     client.close()
 
+# ===== DEBUG: Barang Qty Inconsistency Check =====
+@api_router.get("/debug/barang-qty/{barang_name}")
+async def debug_barang_qty(barang_name: str, user: dict = Depends(get_current_user)):
+    """Check qty inconsistency: PO qty vs Barang Masuk qty for a specific barang.
+    Only accessible to admin."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    # Find all barang matching name (case-insensitive)
+    barangs = []
+    async for b in db.barang.find({"nama_barang": {"$regex": barang_name, "$options": "i"}}):
+        barangs.append(str(b["_id"]))
+    
+    if not barangs:
+        return {"error": f"No barang found matching: {barang_name}", "barangs": []}
+    
+    result = {
+        "barang_name": barang_name,
+        "barang_ids": barangs,
+        "po_entries": [],
+        "barang_masuk_entries": [],
+        "summary": {}
+    }
+    
+    # Find all POs containing these barangs
+    all_pos = {}
+    async for po in db.po.find({"items.barang_id": {"$in": barangs}}):
+        po_id = str(po["_id"])
+        all_pos[po_id] = {
+            "no_po": po.get("no_po", ""),
+            "items": []
+        }
+        for item in po.get("items", []):
+            if item.get("barang_id") in barangs:
+                all_pos[po_id]["items"].append({
+                    "barang_id": item.get("barang_id"),
+                    "qty": item.get("qty", 0)
+                })
+        result["po_entries"].append({
+            "po_id": po_id,
+            "no_po": all_pos[po_id]["no_po"],
+            "items": all_pos[po_id]["items"],
+            "total_qty": sum(i.get("qty", 0) for i in all_pos[po_id]["items"])
+        })
+    
+    # Find Barang Masuk for those POs
+    po_ids = list(all_pos.keys())
+    total_po_qty = sum(e.get("total_qty", 0) for e in result["po_entries"])
+    total_bm_qty = 0
+    
+    async for bm in db.barang_masuk.find({"po_id": {"$in": po_ids}}):
+        for item in bm.get("items", []):
+            if item.get("barang_id") in barangs:
+                result["barang_masuk_entries"].append({
+                    "barang_masuk_id": str(bm["_id"]),
+                    "po_id": bm.get("po_id"),
+                    "tanggal_masuk": bm.get("tanggal_masuk", ""),
+                    "barang_id": item.get("barang_id"),
+                    "qty_diterima": item.get("qty_diterima", 0)
+                })
+                total_bm_qty += item.get("qty_diterima", 0)
+    
+    result["summary"] = {
+        "total_po_qty": total_po_qty,
+        "total_barang_masuk_qty": total_bm_qty,
+        "difference": total_po_qty - total_bm_qty,
+        "consistency": "✅ OK" if total_po_qty == total_bm_qty else "❌ MISMATCH"
+    }
+    
+    return result
+
 # Register all API routes with the FastAPI app
 app.include_router(api_router)
