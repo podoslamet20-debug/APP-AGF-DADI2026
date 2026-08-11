@@ -3113,7 +3113,54 @@ async def admin_po_fix_execute(no_po: str, barang_name: str, user: dict = Depend
         "message": f"Fixed PO {no_po} {barang_name} qty_diterima: {old_qty} → {actual_bm_qty}"
     }
 
+@api_router.post("/admin/sync-po-qty/{no_po}/{barang_name}")
+async def sync_po_qty(no_po: str, barang_name: str, user: dict = Depends(get_current_user)):
+    """Sync PO item qty_diterima with actual Barang Masuk total. Admin only."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    barang = await db.barang.find_one({"nama_barang": {"$regex": barang_name, "$options": "i"}})
+    if not barang:
+        raise HTTPException(status_code=404, detail=f"Barang not found: {barang_name}")
+    
+    barang_id = str(barang["_id"])
+    po = await db.po.find_one({"no_po": no_po})
+    if not po:
+        raise HTTPException(status_code=404, detail=f"PO not found: {no_po}")
+    
+    po_id = str(po["_id"])
+    actual_qty = 0
+    async for bm in db.barang_masuk.find({"po_id": po_id}):
+        for item in bm.get("items", []):
+            if str(item.get("barang_id")) == barang_id:
+                actual_qty += item.get("qty_diterima", 0) or 0
+    
+    old_qty = 0
+    found = False
+    for i, item in enumerate(po.get("items", [])):
+        if str(item.get("barang_id")) == barang_id:
+            old_qty = item.get("qty_diterima", 0) or 0
+            po["items"][i]["qty_diterima"] = actual_qty
+            found = True
+            break
+    
+    if not found:
+        raise HTTPException(status_code=400, detail="Item not found in PO")
+    
+    await db.po.update_one({"_id": po["_id"]}, {"$set": {"items": po["items"]}})
+    
+    return {
+        "success": True,
+        "no_po": no_po,
+        "barang_name": barang_name,
+        "old_qty_diterima": old_qty,
+        "new_qty_diterima": actual_qty,
+        "message": f"Synced {barang_name}: {old_qty} -> {actual_qty}"
+    }
+
 # Register all API routes with the FastAPI app
 app.include_router(api_router)</replaceContent>
+</invoke>
+</replaceContent>
 </invoke>
 
