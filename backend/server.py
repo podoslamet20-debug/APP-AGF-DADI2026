@@ -375,6 +375,12 @@ class ProgresEntry(BaseModel):
     nama_pengrajin: Optional[str] = None
     spesifikasi: Optional[str] = None
     gambar_path: Optional[str] = None
+    # NEW: 5 Finishing Catatan Columns
+    catatan_finishing_1: Optional[str] = None
+    catatan_finishing_2: Optional[str] = None
+    catatan_finishing_3: Optional[str] = None
+    catatan_finishing_4: Optional[str] = None
+    catatan_finishing_5: Optional[str] = None
 
 VALID_STAGES = ["grinda", "servis", "finishing", "packing"]
 PREV_STAGE = {"grinda": None, "servis": "grinda", "finishing": "servis", "packing": "finishing"}
@@ -1251,6 +1257,18 @@ async def create_progres_entry(entry: ProgresEntry, user: dict = Depends(get_cur
             detail=f"Qty {entry.stage} ({entry.qty}){scope} melebihi sisa dari {upstream_label} ({upstream} - {already_at_stage} = {max(int(sisa_before),0)})"
         )
     
+    # Validate finishing stage qty doesn't exceed servis qty
+    if entry.stage == "finishing":
+        servis_qty = 0
+        async for e in db.progres.find({"po_id": po_id, "item_id": entry.item_id, "stage": "servis"}):
+            servis_qty += e.get("qty", 0) or 0
+        
+        if entry.qty > servis_qty:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Finishing qty ({entry.qty}) cannot exceed servis qty ({servis_qty})"
+            )
+    
     doc = {
         "po_id": po_id,
         "item_id": entry.item_id,
@@ -1261,7 +1279,11 @@ async def create_progres_entry(entry: ProgresEntry, user: dict = Depends(get_cur
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": user["_id"],
     }
-    for meta_key in ("nama_barang", "nama_pengrajin", "pengrajin_nama", "spesifikasi", "gambar_path"):
+    for meta_key in (
+        "nama_barang", "nama_pengrajin", "pengrajin_nama", "spesifikasi", "gambar_path",
+        "catatan_finishing_1", "catatan_finishing_2", "catatan_finishing_3",
+        "catatan_finishing_4", "catatan_finishing_5",
+    ):
         val = getattr(entry, meta_key, None)
         if val:
             doc[meta_key] = val
@@ -1341,6 +1363,18 @@ async def update_progres_entry(entry_id: str, entry: ProgresEntry, user: dict = 
             detail=f"Qty {entry.stage} ({entry.qty}) melebihi sisa dari {upstream_label} ({upstream} - {already_at_stage} = {max(int(sisa_before),0)})"
         )
     
+    # Validate finishing stage qty doesn't exceed servis qty
+    if entry.stage == "finishing":
+        servis_qty = 0
+        async for e in db.progres.find({"po_id": po_id, "item_id": entry.item_id, "stage": "servis"}):
+            servis_qty += e.get("qty", 0) or 0
+        
+        if entry.qty > servis_qty:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Finishing qty ({entry.qty}) cannot exceed servis qty ({servis_qty})"
+            )
+    
     update_doc = {
         "po_id": po_id,
         "item_id": entry.item_id,
@@ -1351,7 +1385,11 @@ async def update_progres_entry(entry_id: str, entry: ProgresEntry, user: dict = 
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "updated_by": user["_id"],
     }
-    for meta_key in ("nama_barang", "nama_pengrajin", "pengrajin_nama", "spesifikasi", "gambar_path"):
+    for meta_key in (
+        "nama_barang", "nama_pengrajin", "pengrajin_nama", "spesifikasi", "gambar_path",
+        "catatan_finishing_1", "catatan_finishing_2", "catatan_finishing_3",
+        "catatan_finishing_4", "catatan_finishing_5",
+    ):
         val = getattr(entry, meta_key, None)
         if val:
             update_doc[meta_key] = val
