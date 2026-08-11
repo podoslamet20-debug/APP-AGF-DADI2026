@@ -480,6 +480,18 @@ export default function ProgresBarang() {
                             <Label className="text-xs" style={{ color: stage.color }}>{stage.label}</Label>
                             <div className="mt-1 text-2xl font-bold" style={{ color: stage.color }} data-testid={`progres-${stage.key}-${poIdx}-${idx}`}>{item[stage.key] || 0}</div>
                             <p className="text-xs text-[#5C5C5C]" data-testid={`progres-sisa-${stage.key}-${poIdx}-${idx}`}>Sisa: <strong className="text-[#1A1A1A]">{item[`sisa_${stage.key}`] || 0}</strong></p>
+                            {stage.key === "finishing" && (
+                              <div className="mt-2 text-xs text-[#666] border-t border-[#E5E5E5] pt-2" data-testid={`progres-finishing-catatan-${poIdx}-${idx}`}>
+                                {item.catatan_finishing_1 && <p className="text-[#5C5C5C] my-0.5">📌 {item.catatan_finishing_1}</p>}
+                                {item.catatan_finishing_2 && <p className="text-[#5C5C5C] my-0.5">📌 {item.catatan_finishing_2}</p>}
+                                {item.catatan_finishing_3 && <p className="text-[#5C5C5C] my-0.5">📌 {item.catatan_finishing_3}</p>}
+                                {item.catatan_finishing_4 && <p className="text-[#5C5C5C] my-0.5">📌 {item.catatan_finishing_4}</p>}
+                                {item.catatan_finishing_5 && <p className="text-[#5C5C5C] my-0.5">📌 {item.catatan_finishing_5}</p>}
+                                {!item.catatan_finishing_1 && !item.catatan_finishing_2 && !item.catatan_finishing_3 && !item.catatan_finishing_4 && !item.catatan_finishing_5 && (
+                                  <p className="text-[#999] italic text-[9px]">—</p>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
