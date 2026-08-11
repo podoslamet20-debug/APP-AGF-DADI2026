@@ -1386,7 +1386,7 @@ async def update_progres_entry(entry_id: str, entry: ProgresEntry, user: dict = 
         "updated_by": user["_id"],
     }
     for meta_key in (
-        ""nama_barang", "nama_pengrajin", "pengrajin_nama", "spesifikasi", "gambar_path",
+        "nama_barang", "nama_pengrajin", "pengrajin_nama", "spesifikasi", "gambar_path",
         "catatan_finishing_1", "catatan_finishing_2", "catatan_finishing_3",
         "catatan_finishing_4", "catatan_finishing_5",
     ):
