@@ -42,8 +42,14 @@ export default function ProgresBarang() {
     nama_pengrajin: "",
     spesifikasi: "",
     gambar_path: "",
+    catatan_finishing_1: "",
+    catatan_finishing_2: "",
+    catatan_finishing_3: "",
+    catatan_finishing_4: "",
+    catatan_finishing_5: "",
   };
   const [form, setForm] = useState(initialForm);
+  const [errorMsg, setErrorMsg] = useState("");
 
   const load = async () => {
     try {
@@ -125,6 +131,7 @@ export default function ProgresBarang() {
     if (!form.item_id) return toast.error("Pilih atau isi barang");
     if (!manual && !form.po_id) return toast.error("Pilih PO terlebih dahulu");
     if (!form.qty || form.qty <= 0) return toast.error("Qty harus lebih besar dari 0");
+    setErrorMsg("");
     const payload = {
       po_id: form.po_id || null,
       item_id: form.item_id,
@@ -137,6 +144,13 @@ export default function ProgresBarang() {
       payload.nama_pengrajin = form.nama_pengrajin;
       payload.spesifikasi = form.spesifikasi;
       payload.gambar_path = form.gambar_path;
+    }
+    if (form.stage === "finishing") {
+      payload.catatan_finishing_1 = form.catatan_finishing_1;
+      payload.catatan_finishing_2 = form.catatan_finishing_2;
+      payload.catatan_finishing_3 = form.catatan_finishing_3;
+      payload.catatan_finishing_4 = form.catatan_finishing_4;
+      payload.catatan_finishing_5 = form.catatan_finishing_5;
     }
     try {
       const url = editEntryId ? `${API}/progres/${editEntryId}` : `${API}/progres`;
@@ -151,7 +165,11 @@ export default function ProgresBarang() {
       setHistoryMap({});
       load();
     } catch (e) {
-      toast.error("Gagal simpan: " + (e.response?.data?.detail || e.message));
+      const detail = e.response?.data?.detail || e.message;
+      if (e.response?.status === 400) {
+        setErrorMsg(`⚠️ ${detail}`);
+      }
+      toast.error("Gagal simpan: " + detail);
     }
   };
 
@@ -170,7 +188,13 @@ export default function ProgresBarang() {
       nama_pengrajin: entry.nama_pengrajin || "",
       spesifikasi: entry.spesifikasi || "",
       gambar_path: entry.gambar_path || "",
+      catatan_finishing_1: entry.catatan_finishing_1 || "",
+      catatan_finishing_2: entry.catatan_finishing_2 || "",
+      catatan_finishing_3: entry.catatan_finishing_3 || "",
+      catatan_finishing_4: entry.catatan_finishing_4 || "",
+      catatan_finishing_5: entry.catatan_finishing_5 || "",
     });
+    setErrorMsg("");
     setOpen(true);
   };
 
@@ -222,7 +246,7 @@ export default function ProgresBarang() {
         </div>
         <div className="flex gap-2 flex-wrap items-end">
           {canEditPartial && (
-            <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setManual(false); setForm(initialForm); } }}>
+            <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setManual(false); setForm(initialForm); setEditEntryId(null); setErrorMsg(""); } }}>
               <DialogTrigger asChild>
                 <Button className="bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="add-progres-button"><Plus className="w-4 h-4 mr-2" /> Tambah Progres</Button>
               </DialogTrigger>
@@ -322,6 +346,11 @@ export default function ProgresBarang() {
                       value={form.qty}
                       onChange={(e) => {
                         const n = Math.max(0, parseInt(e.target.value) || 0);
+                        if (form.stage === "finishing" && !manual && ctx.upstreamQty != null && n > ctx.upstreamQty) {
+                          setErrorMsg(`⚠️ Finishing qty (${n}) tidak boleh melebihi servis qty (${ctx.upstreamQty})`);
+                        } else {
+                          setErrorMsg("");
+                        }
                         setForm({ ...form, qty: manual ? n : (ctx.max > 0 ? Math.min(n, ctx.max) : 0) });
                       }}
                       data-testid="progres-qty-input"
@@ -329,6 +358,61 @@ export default function ProgresBarang() {
                     />
                     {!manual && ctx.max === 0 && <p className="text-xs text-[#F44336] mt-1">Tidak ada sisa yang bisa diinput ke {form.stage}. Isi stage sebelumnya dulu.</p>}
                   </div>
+
+                  {form.stage === "finishing" && (
+                    <div className="mt-4" data-testid="progres-catatan-finishing-section">
+                      <Label className="block text-sm font-medium mb-2">Catatan Finishing (Warna & Qty)</Label>
+                      <div className="space-y-2">
+                        <Input
+                          type="text"
+                          maxLength={100}
+                          placeholder="Catatan 1 (e.g., Merah: 10pcs)"
+                          value={form.catatan_finishing_1}
+                          onChange={(e) => setForm({ ...form, catatan_finishing_1: e.target.value })}
+                          className="w-full px-3 py-2 border rounded-md text-sm"
+                          data-testid="progres-catatan-finishing-1"
+                        />
+                        <Input
+                          type="text"
+                          maxLength={100}
+                          placeholder="Catatan 2 (e.g., Biru: 15pcs)"
+                          value={form.catatan_finishing_2}
+                          onChange={(e) => setForm({ ...form, catatan_finishing_2: e.target.value })}
+                          className="w-full px-3 py-2 border rounded-md text-sm"
+                          data-testid="progres-catatan-finishing-2"
+                        />
+                        <Input
+                          type="text"
+                          maxLength={100}
+                          placeholder="Catatan 3"
+                          value={form.catatan_finishing_3}
+                          onChange={(e) => setForm({ ...form, catatan_finishing_3: e.target.value })}
+                          className="w-full px-3 py-2 border rounded-md text-sm"
+                          data-testid="progres-catatan-finishing-3"
+                        />
+                        <Input
+                          type="text"
+                          maxLength={100}
+                          placeholder="Catatan 4"
+                          value={form.catatan_finishing_4}
+                          onChange={(e) => setForm({ ...form, catatan_finishing_4: e.target.value })}
+                          className="w-full px-3 py-2 border rounded-md text-sm"
+                          data-testid="progres-catatan-finishing-4"
+                        />
+                        <Input
+                          type="text"
+                          maxLength={100}
+                          placeholder="Catatan 5"
+                          value={form.catatan_finishing_5}
+                          onChange={(e) => setForm({ ...form, catatan_finishing_5: e.target.value })}
+                          className="w-full px-3 py-2 border rounded-md text-sm"
+                          data-testid="progres-catatan-finishing-5"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {errorMsg && <p className="text-xs text-[#F44336] mt-1" data-testid="progres-error-msg">{errorMsg}</p>}
 
                   <Button onClick={submitCreate} className="w-full bg-[#8B5A2B] hover:bg-[#7A4E24] text-white" data-testid="submit-progres-button" disabled={!manual && ctx.max === 0}>Simpan Entry</Button>
                 </div>
@@ -407,15 +491,26 @@ export default function ProgresBarang() {
                           {!historyMap[k] ? <p className="text-xs text-[#5C5C5C]">Memuat...</p> : historyMap[k].length === 0 ? <p className="text-xs text-[#5C5C5C]">Belum ada entry.</p> : (
                             <div className="space-y-1">
                               {historyMap[k].map((e) => (
-                                <div key={e._id} className="flex items-center gap-2 text-sm">
-                                  <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: (STAGES.find(s => s.key === e.stage)?.color || "#8B5A2B") + "22", color: STAGES.find(s => s.key === e.stage)?.color || "#8B5A2B" }}>{e.stage}</span>
-                                  <span className="font-medium">+{e.qty}</span>
-                                  <span className="text-[#5C5C5C]">•</span>
-                                  <span className="text-xs text-[#5C5C5C]"><Calendar className="w-3 h-3 inline mr-0.5" />{e.tanggal}</span>
-                                  {canEdit && (
-                                    <div className="ml-auto flex gap-1">
-                                      <Button variant="ghost" size="sm" className="text-[#2196F3] text-xs h-6 px-2" onClick={() => startEditEntry(e)} data-testid={`edit-entry-${e._id}`}>Edit</Button>
-                                      <Button variant="ghost" size="sm" className="text-[#F44336] text-xs h-6 px-2" onClick={() => deleteEntry(e._id, po.po_id, item.barang_id)}>Hapus</Button>
+                                <div key={e._id}>
+                                  <div className="flex items-center gap-2 text-sm">
+                                    <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: (STAGES.find(s => s.key === e.stage)?.color || "#8B5A2B") + "22", color: STAGES.find(s => s.key === e.stage)?.color || "#8B5A2B" }}>{e.stage}</span>
+                                    <span className="font-medium">+{e.qty}</span>
+                                    <span className="text-[#5C5C5C]">•</span>
+                                    <span className="text-xs text-[#5C5C5C]"><Calendar className="w-3 h-3 inline mr-0.5" />{e.tanggal}</span>
+                                    {canEdit && (
+                                      <div className="ml-auto flex gap-1">
+                                        <Button variant="ghost" size="sm" className="text-[#2196F3] text-xs h-6 px-2" onClick={() => startEditEntry(e)} data-testid={`edit-entry-${e._id}`}>Edit</Button>
+                                        <Button variant="ghost" size="sm" className="text-[#F44336] text-xs h-6 px-2" onClick={() => deleteEntry(e._id, po.po_id, item.barang_id)}>Hapus</Button>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {e.stage === "finishing" && (
+                                    <div className="pl-1" data-testid={`catatan-finishing-${e._id}`}>
+                                      {e.catatan_finishing_1 && <p className="text-xs text-gray-600">{e.catatan_finishing_1}</p>}
+                                      {e.catatan_finishing_2 && <p className="text-xs text-gray-600">{e.catatan_finishing_2}</p>}
+                                      {e.catatan_finishing_3 && <p className="text-xs text-gray-600">{e.catatan_finishing_3}</p>}
+                                      {e.catatan_finishing_4 && <p className="text-xs text-gray-600">{e.catatan_finishing_4}</p>}
+                                      {e.catatan_finishing_5 && <p className="text-xs text-gray-600">{e.catatan_finishing_5}</p>}
                                     </div>
                                   )}
                                 </div>
