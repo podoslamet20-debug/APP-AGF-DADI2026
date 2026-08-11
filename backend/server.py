@@ -2994,5 +2994,126 @@ async def debug_barang_qty(barang_name: str, user: dict = Depends(get_current_us
     
     return result
 
+# ===== ADMIN: Fix PO Barang Qty Inconsistency =====
+@api_router.get("/admin/po-fix/by-no/{no_po}/{barang_name}")
+async def admin_po_fix_check(no_po: str, barang_name: str, user: dict = Depends(get_current_user)):
+    """Check what the fix would be for a PO barang qty mismatch. Admin only."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    # Find barang by name
+    barang = await db.barang.find_one({"nama_barang": {"$regex": barang_name, "$options": "i"}})
+    if not barang:
+        raise HTTPException(status_code=404, detail=f"Barang not found: {barang_name}")
+    
+    barang_id = str(barang["_id"])
+    
+    # Find PO by no_po
+    po = await db.po.find_one({"no_po": no_po})
+    if not po:
+        raise HTTPException(status_code=404, detail=f"PO not found: {no_po}")
+    
+    po_id = str(po["_id"])
+    current_diterima = 0
+    for item in po.get("items", []):
+        if str(item.get("barang_id")) == barang_id:
+            current_diterima = item.get("qty_diterima", 0) or 0
+            break
+    
+    # Calculate actual Barang Masuk total for this barang from this PO
+    actual_bm_qty = 0
+    async for bm in db.barang_masuk.find({"po_id": po_id}):
+        for item in bm.get("items", []):
+            if str(item.get("barang_id")) == barang_id:
+                actual_bm_qty += item.get("qty_diterima", 0) or 0
+    
+    return {
+        "no_po": no_po,
+        "barang_name": barang_name,
+        "barang_id": barang_id,
+        "po_id": po_id,
+        "current_qty_diterima_in_po": current_diterima,
+        "actual_barang_masuk_total": actual_bm_qty,
+        "match": current_diterima == actual_bm_qty,
+        "action_needed": "Update PO item qty_diterima from {} to {}".format(current_diterima, actual_bm_qty) if current_diterima != actual_bm_qty else "No action needed"
+    }
+
+@api_router.post("/admin/po-fix/by-no/{no_po}/{barang_name}")
+async def admin_po_fix_execute(no_po: str, barang_name: str, user: dict = Depends(get_current_user)):
+    """Actually fix the PO barang qty_diterima to match Barang Masuk. Admin only."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    # Find barang by name
+    barang = await db.barang.find_one({"nama_barang": {"$regex": barang_name, "$options": "i"}})
+    if not barang:
+        raise HTTPException(status_code=404, detail=f"Barang not found: {barang_name}")
+    
+    barang_id = str(barang["_id"])
+    
+    # Find PO by no_po
+    po = await db.po.find_one({"no_po": no_po})
+    if not po:
+        raise HTTPException(status_code=404, detail=f"PO not found: {no_po}")
+    
+    po_id = str(po["_id"])
+    
+    # Calculate actual Barang Masuk total for this barang from this PO
+    actual_bm_qty = 0
+    async for bm in db.barang_masuk.find({"po_id": po_id}):
+        for item in bm.get("items", []):
+            if str(item.get("barang_id")) == barang_id:
+                actual_bm_qty += item.get("qty_diterima", 0) or 0
+    
+    # Update PO items - find the matching item and update qty_diterima
+    updated = False
+    old_qty = 0
+    for i, item in enumerate(po.get("items", [])):
+        if str(item.get("barang_id")) == barang_id:
+            old_qty = item.get("qty_diterima", 0)
+            po["items"][i]["qty_diterima"] = actual_bm_qty
+            updated = True
+            break
+    
+    if not updated:
+        raise HTTPException(status_code=400, detail="Item not found in PO")
+    
+    # Save back to database
+    result = await db.po.update_one(
+        {"_id": po["_id"]},
+        {"$set": {"items": po["items"]}}
+    )
+    
+    # Log the fix
+    try:
+        await db.activity_log.insert_one({
+            "user_id": user.get("_id", ""),
+            "user_email": user.get("email", ""),
+            "user_role": user.get("role", ""),
+            "action": "po_qty_fix",
+            "resource": "po",
+            "resource_label": "PO",
+            "resource_id": po_id,
+            "path": f"/admin/po-fix/by-no/{no_po}/{barang_name}",
+            "method": "POST",
+            "status_code": 200,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "ip": "",
+            "details": f"Fixed {barang_name} qty_diterima from {old_qty} to {actual_bm_qty}"
+        })
+    except Exception as e:
+        logger.warning(f"Failed to log PO fix: {e}")
+    
+    return {
+        "success": True,
+        "no_po": no_po,
+        "barang_name": barang_name,
+        "old_qty_diterima": old_qty,
+        "new_qty_diterima": actual_bm_qty,
+        "message": f"Fixed PO {no_po} {barang_name} qty_diterima: {old_qty} → {actual_bm_qty}"
+    }
+
 # Register all API routes with the FastAPI app
-app.include_router(api_router)
+app.include_router(api_router)</replaceContent>
+</invoke>
+
