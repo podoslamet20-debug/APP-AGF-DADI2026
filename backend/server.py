@@ -3197,6 +3197,39 @@ async def sync_po_qty(no_po: str, barang_name: str, user: dict = Depends(get_cur
     }
 
 # Register all API routes with the FastAPI app
+@api_router.get("/progres/aggregate-catatan/{po_id}/{item_id}")
+async def get_aggregate_catatan(po_id: str, item_id: str, user: dict = Depends(get_current_user)):
+    """Aggregate catatan finishing from all finishing entries for a barang in a PO.
+    Returns accumulated totals of catatan_finishing_1..5 across all dates."""
+    entries = await db.progres.find({
+        "po_id": po_id,
+        "item_id": item_id,
+        "stage": "finishing"
+    }).to_list(1000)
+    
+    # Aggregate catatan: concatenate all values from all entries
+    catatan_agg = {
+        "catatan_finishing_1": [],
+        "catatan_finishing_2": [],
+        "catatan_finishing_3": [],
+        "catatan_finishing_4": [],
+        "catatan_finishing_5": [],
+    }
+    
+    for entry in entries:
+        for i in range(1, 6):
+            key = f"catatan_finishing_{i}"
+            val = entry.get(key)
+            if val:
+                catatan_agg[key].append(val)
+    
+    # Return aggregated: join with " + " to show accumulation
+    result = {}
+    for i in range(1, 6):
+        key = f"catatan_finishing_{i}"
+        result[key] = " + ".join(catatan_agg[key]) if catatan_agg[key] else ""
+    
+    return result
 app.include_router(api_router)</replaceContent>
 </invoke>
 </replaceContent>
