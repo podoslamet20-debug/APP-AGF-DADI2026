@@ -471,7 +471,7 @@ async def startup_event():
                     for stage in ["grinda", "servis", "finishing", "packing"]:
                         qty = int(old.get(stage, 0) or 0)
                         if qty > 0:
-                            await db.progres.insert_one({
+                            ({
                                 "po_id": po_id,
                                 "item_id": item_id,
                                 "stage": stage,
@@ -1288,7 +1288,7 @@ async def create_progres_entry(entry: ProgresEntry, user: dict = Depends(get_cur
         if val:
             doc[meta_key] = val
     
-    result = await db.progres.insert_one(doc)
+    result = await db.progres.insert_one(entry.model_dump(exclude_unset=True))
     doc["_id"] = str(result.inserted_id)
     
     # Return with computed sisa_after for UX
